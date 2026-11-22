@@ -1,0 +1,17 @@
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Local environments and build outputs
+build/
+dist/
+*.egg-info/
+
+# macOS
+.DS_Store
+.venv
+
+# yeah im using cc, too fed up with codex
+.claude
