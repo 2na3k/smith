@@ -97,6 +97,7 @@ class MLXKernel:
         self.__name__ = jit_function.__name__
         self.__doc__ = jit_function.__doc__
         self.kernels = {}
+        self.bodies = {}
 
     def __call__(self, *args, **kwargs):
         raise TypeError(f"launch '{self.__name__}' with {self.__name__}[grid](...)")
@@ -106,14 +107,15 @@ class MLXKernel:
             return self._launch(grid, args, kwargs, init_value)
         return launch
 
-    def _kernel(self, body, input_names, output_names):
-        key = (body, input_names, output_names)
+    def _kernel(self, body, input_names, output_names, header=""):
+        key = (body, input_names, output_names, header)
         if key not in self.kernels:
             self.kernels[key] = _mlx().fast.metal_kernel(
                 name=self.__name__,
                 input_names=list(input_names),
                 output_names=list(output_names),
                 source=body,
+                header=header,
             )
         return self.kernels[key]
 
@@ -159,8 +161,11 @@ class MLXKernel:
         group = tuple(grid(constexprs) if callable(grid) else grid)
         group = group + (1,) * (3 - len(group))
         lanes = program.lanes
-        body = "\n".join(render_statements(program.graph, leaf=mlx_leaf))
-        kernel = self._kernel(body, all_input_names, tuple(output_names))
+        if program not in self.bodies:
+            self.bodies[program] = "\n".join(render_statements(program.graph, leaf=mlx_leaf))
+        body = self.bodies[program]
+        header = "#include <metal_simdgroup_matrix>\n" if program.uses_matrices else ""
+        kernel = self._kernel(body, all_input_names, tuple(output_names), header)
 
         options = {} if init_value is None else {"init_value": init_value}
         results = kernel(

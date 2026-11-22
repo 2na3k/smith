@@ -134,7 +134,7 @@ class Buffer:
     def __init__(self, dtype, n: int):
         self.handle = None
         self.dtype, self.n = dtype, n
-        self.nbytes = n * dtype.size
+        self.nbytes = dtype.nbytes(n)
         self.handle = _send(metal_device(), "newBufferWithLength:options:", self.nbytes,
                             MTLResourceStorageModeShared, argtypes=(ctypes.c_ulong, ctypes.c_ulong))
         if not self.handle:

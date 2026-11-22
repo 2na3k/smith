@@ -21,6 +21,8 @@ PLAIN_OPERATORS = {
     "mul": operator.mul,
     "and": operator.and_,
     "or": operator.or_,
+    "shl": operator.lshift,
+    "shr": operator.rshift,
     "less": operator.lt,
     "less_equal": operator.le,
     "greater": operator.gt,
@@ -230,6 +232,8 @@ def evaluate(program, grid, scalars=None, buffers=None):
             lengths[name] = len(contents[name])
     live = live_nodes(program.graph)
     nodes = [node for node in program.graph.nodes if node.index in live]
+    if any(node.op == "loop" for node in nodes):
+        raise NotImplementedError("layout analysis does not support kernels with loops yet")
     accesses = []
     for program_id in itertools.product(*(range(size) for size in grid)):
         for lane in range(program.lanes):

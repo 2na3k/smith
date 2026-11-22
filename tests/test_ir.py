@@ -1,6 +1,6 @@
 import unittest
 
-from smith.dtype import bool_, float32, int32
+from smith.dtype import bfloat16, bool_, float16, float32, int32
 from smith.ir import Graph, format_graph
 from smith.passes import simplify
 from smith.render import render_metal
@@ -39,6 +39,12 @@ class TestGraph(unittest.TestCase):
     def test_bitwise_on_float_is_rejected(self):
         with self.assertRaises(TypeError):
             self.graph.binary("and", self.graph.const(1.0), self.graph.const(2.0))
+
+    def test_bitwise_on_half_precision_is_rejected(self):
+        for dtype in (float16, bfloat16):
+            value = self.graph.cast(self.graph.const(1.0), dtype)
+            with self.assertRaises(TypeError):
+                self.graph.binary("or", value, value)
 
 
 class TestSimplify(unittest.TestCase):

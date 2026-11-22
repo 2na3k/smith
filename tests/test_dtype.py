@@ -62,7 +62,7 @@ class TestDTypeTable(unittest.TestCase):
     def test_all_lists_every_dtype(self):
         self.assertEqual(len(dtype.ALL), len(set(dtype.ALL)))
         self.assertEqual(set(dtype.ALL), {getattr(dtype, name) for name in
-                         ("float16", "bfloat16", "float32", "int8", "int16", "int32", "int64",
+                         ("float16", "bfloat16", "float32", "int2", "uint2", "int4", "uint4", "int8", "int16", "int32", "int64",
                           "uint8", "uint16", "uint32", "uint64", "bool_")})
 
     def test_float64_is_a_clear_error(self):

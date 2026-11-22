@@ -2,7 +2,7 @@ import sys
 import unittest
 
 if sys.platform == "darwin":
-    from smith.kernels import add
+    from smith.kernels.add import add
 
 
 @unittest.skipUnless(sys.platform == "darwin", "Metal requires macOS")

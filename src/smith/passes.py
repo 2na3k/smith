@@ -2,7 +2,7 @@ import math
 import operator
 
 from .dtype import bool_, float32
-from .ir import BINARY, COMPARISONS, Graph
+from .ir import BINARY, COMPARISONS, SHIFTS, Graph, LoopBody
 
 FOLDABLE = {
     "add": operator.add,
@@ -10,6 +10,8 @@ FOLDABLE = {
     "mul": operator.mul,
     "and": operator.and_,
     "or": operator.or_,
+    "shl": operator.lshift,
+    "shr": operator.rshift,
     "less": operator.lt,
     "less_equal": operator.le,
     "greater": operator.gt,
@@ -51,7 +53,8 @@ def _is_false(node):
 
 def _simplify_binary(graph, op, dtype, inputs):
     left, right = inputs
-    if left.op == "const" and right.op == "const" and left.dtype != float32 and op in FOLDABLE:
+    if (left.op == "const" and right.op == "const" and left.dtype.kind != "float" and op in FOLDABLE
+            and (op not in SHIFTS or 0 <= right.arg < left.dtype.bits)):
         return graph.node("const", (), _convert(FOLDABLE[op](left.arg, right.arg), dtype), dtype)
     if op == "add":
         if _is_value(right, 0) and left.dtype == dtype:
@@ -67,6 +70,11 @@ def _simplify_binary(graph, op, dtype, inputs):
         if _is_value(left, 1) and right.dtype == dtype:
             return right
         if dtype != float32 and (_is_value(left, 0) or _is_value(right, 0)):
+            return graph.node("const", (), 0, dtype)
+    elif op in SHIFTS:
+        if _is_value(right, 0) and left.dtype == dtype:
+            return left
+        if _is_value(left, 0):
             return graph.node("const", (), 0, dtype)
     elif op == "floordiv":
         if dtype != float32 and _is_value(right, 1):
@@ -92,6 +100,23 @@ def _rewrite(graph, node, inputs):
         folded = _simplify_binary(graph, op, dtype, inputs)
         if folded is not None:
             return folded
+    elif op == "matrix_element":
+        (matrix,) = inputs
+        if matrix.op == "matrix_make":
+            return matrix.inputs[node.arg]
+    elif op == "where":
+        condition, left, right = inputs
+        if _is_true(condition):
+            return left
+        if _is_false(condition):
+            return right
+    elif op == "loop":
+        body = node.arg
+        inner, replaced = _simplify(body.graph)
+        simplified = LoopBody(inner, replaced[body.index.index], [replaced[n.index] for n in body.carried],
+                              [replaced[n.index] for n in body.outputs])
+        simplified.captures = list(inputs[2 + len(body.carried):])
+        return graph.node("loop", inputs, simplified, None, unique=True)
     elif op == "load":
         if len(inputs) == 4 and _is_true(inputs[2]):
             inputs = inputs[:2]
@@ -104,11 +129,15 @@ def _rewrite(graph, node, inputs):
     return graph.node(op, inputs, node.arg, dtype, unique=op == "store")
 
 
-def simplify(graph):
+def _simplify(graph):
     result = Graph()
     result.version = graph.version
     replacements = {}
     for node in graph.nodes:
         inputs = tuple(replacements[i.index] for i in node.inputs)
         replacements[node.index] = _rewrite(result, node, inputs)
-    return result
+    return result, replacements
+
+
+def simplify(graph):
+    return _simplify(graph)[0]

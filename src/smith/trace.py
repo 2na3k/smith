@@ -1,19 +1,22 @@
 from .dtype import DType, float32, int32
-from .ir import Graph, Node
+from .ir import Graph, LoopBody, Node, walk
 from .ops import Pointer, _ctx
 from .passes import simplify
 from .render import render_metal
 
 
+def _graph():
+    return _ctx["tracer"].graph
+
+
 class Symbol:
-    def __init__(self, node, graph):
+    def __init__(self, node):
         self.node = node
-        self.graph = graph
 
     def _binary(self, op, other, reflected=False):
-        other = _lift(self.graph, other)
+        other = _lift(other)
         left, right = (other, self.node) if reflected else (self.node, other)
-        return Symbol(self.graph.binary(op, left, right), self.graph)
+        return Symbol(_graph().binary(op, left, right))
 
     def __add__(self, other): return self._binary("add", other)
     def __radd__(self, other): return self._binary("add", other, True)
@@ -31,22 +34,26 @@ class Symbol:
     def __rand__(self, other): return self._binary("and", other, True)
     def __or__(self, other): return self._binary("or", other)
     def __ror__(self, other): return self._binary("or", other, True)
+    def __lshift__(self, other): return self._binary("shl", other)
+    def __rlshift__(self, other): return self._binary("shl", other, True)
+    def __rshift__(self, other): return self._binary("shr", other)
+    def __rrshift__(self, other): return self._binary("shr", other, True)
     def __lt__(self, other): return self._binary("less", other)
     def __le__(self, other): return self._binary("less_equal", other)
     def __gt__(self, other): return self._binary("greater", other)
     def __ge__(self, other): return self._binary("greater_equal", other)
-    def __neg__(self): return Symbol(self.graph.negate(self.node), self.graph)
+    def __neg__(self): return Symbol(_graph().negate(self.node))
 
     def __bool__(self):
         raise TypeError("a traced value has no Python truth value: use a mask instead of if/and/or")
 
 
-def _lift(graph, value):
+def _lift(value):
     if isinstance(value, Symbol):
         return value.node
     if isinstance(value, Node):
         return value
-    return graph.const(value)
+    return _graph().const(value)
 
 
 class TracedBuffer:
@@ -62,7 +69,56 @@ class Tracer:
         self.lanes = None
 
     def _symbol(self, node):
-        return Symbol(node, self.graph)
+        return Symbol(node)
+
+    def unary(self, op, value):
+        return self._symbol(self.graph.unary(op, _lift(value)))
+
+    def binary(self, op, left, right):
+        return self._symbol(self.graph.binary(op, _lift(left), _lift(right)))
+
+    def matrix_fill(self, value, element):
+        return self._symbol(self.graph.matrix_fill(_lift(value), element))
+
+    def matrix_load(self, pointer, stride, transpose):
+        return self._symbol(self.graph.matrix_load(pointer.buffer.node, _lift(pointer.offset), _lift(stride), transpose))
+
+    def matrix_mma(self, left, right, accumulator):
+        return self._symbol(self.graph.matrix_mma(_lift(left), _lift(right), _lift(accumulator)))
+
+    def matrix_elements(self, matrix):
+        node = _lift(matrix)
+        return self._symbol(self.graph.matrix_element(node, 0)), self._symbol(self.graph.matrix_element(node, 1))
+
+    def matrix_make(self, first, second, element):
+        return self._symbol(self.graph.matrix_make(_lift(first), _lift(second), element))
+
+    def shuffle_xor(self, value, mask):
+        return self._symbol(self.graph.shuffle_xor(_lift(value), mask))
+
+    def where(self, condition, left, right):
+        return self._symbol(self.graph.where(_lift(condition), _lift(left), _lift(right)))
+
+    def cast(self, value, dtype):
+        return self._symbol(self.graph.cast(_lift(value), dtype))
+
+    def loop(self, count, init, body):
+        outer = self.graph
+        inits = [_lift(value) for value in init]
+        child = Graph(parent=outer)
+        index = child.node("loop_index", dtype=int32)
+        carried = [child.node("carried", arg=slot, dtype=node.dtype) for slot, node in enumerate(inits)]
+        self.graph = child
+        try:
+            results = body(Symbol(index), *(Symbol(node) for node in carried))
+            results = tuple(results) if isinstance(results, (tuple, list)) else (results,)
+            if len(results) != len(inits):
+                raise ValueError(f"loop body returned {len(results)} values for {len(inits)} carried values")
+            outputs = [child.cast(_lift(value), node.dtype) for value, node in zip(results, carried)]
+        finally:
+            self.graph = outer
+        finished = outer.loop(outer.const(0), _lift(count), inits, LoopBody(child, index, carried, outputs))
+        return tuple(Symbol(node) for node in finished)
 
     def program_id(self, axis):
         return self._symbol(self.graph.program_id(axis))
@@ -81,14 +137,14 @@ class Tracer:
         return self._symbol(lane if start == 0 else self.graph.binary("add", lane, self.graph.const(start)))
 
     def load(self, pointer, mask, other):
-        offset = _lift(self.graph, pointer.offset)
-        mask = None if mask is None else _lift(self.graph, mask)
-        return self._symbol(self.graph.load(pointer.buffer.node, offset, mask, _lift(self.graph, other)))
+        offset = _lift(pointer.offset)
+        mask = None if mask is None else _lift(mask)
+        return self._symbol(self.graph.load(pointer.buffer.node, offset, mask, _lift(other)))
 
     def store(self, pointer, value, mask):
-        offset = _lift(self.graph, pointer.offset)
-        mask = None if mask is None else _lift(self.graph, mask)
-        self.graph.store(pointer.buffer.node, offset, _lift(self.graph, value), mask)
+        offset = _lift(pointer.offset)
+        mask = None if mask is None else _lift(mask)
+        self.graph.store(pointer.buffer.node, offset, _lift(value), mask)
 
 
 class BufferSpec:
@@ -110,8 +166,9 @@ class Program:
         self.graph = graph
         self.buffers = buffers
         self.scalars = scalars
-        self.loaded = frozenset(n.inputs[0].arg for n in graph.nodes if n.op == "load")
-        self.stored = frozenset(n.inputs[0].arg for n in graph.nodes if n.op == "store")
+        self.uses_matrices = any(n.op.startswith("matrix_") for n in walk(graph))
+        self.loaded = frozenset(n.inputs[0].arg for n in walk(graph) if n.op in ("load", "matrix_load"))
+        self.stored = frozenset(n.inputs[0].arg for n in walk(graph) if n.op == "store")
 
 
 def trace_kernel(function, values, constexpr_names) -> Program:
@@ -130,11 +187,11 @@ def trace_kernel(function, values, constexpr_names) -> Program:
             parameters.append(f"device {value.dtype.msl}* {name} [[buffer({slot})]]")
         elif type(value) is int:
             scalars[name] = int32
-            call[name] = Symbol(tracer.graph.argument(name, int32), tracer.graph)
+            call[name] = Symbol(tracer.graph.argument(name, int32))
             parameters.append(f"constant int& {name} [[buffer({slot})]]")
         elif type(value) is float:
             scalars[name] = float32
-            call[name] = Symbol(tracer.graph.argument(name, float32), tracer.graph)
+            call[name] = Symbol(tracer.graph.argument(name, float32))
             parameters.append(f"constant float& {name} [[buffer({slot})]]")
         else:
             raise TypeError(f"unsupported kernel argument {name!r} of type {type(value).__name__}")

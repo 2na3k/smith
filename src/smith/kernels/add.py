@@ -1,5 +1,5 @@
-from . import dtype
-from .compiler import Buffer, compile_msl, launch
+from .. import dtype
+from ..compiler import Buffer, compile_msl, launch
 
 ADD_MSL = """
 #include <metal_stdlib>

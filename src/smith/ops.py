@@ -3,6 +3,7 @@
 A "vector" is a Vec (a list of lane values). Pointers are Pointer(buffer, offset) where
 offset is an int or a Vec. The launcher in jit.py sets the program context before each run.
 """
+import math
 import operator
 
 _ctx = {"pid": (0, 0, 0), "grid": (1, 1, 1), "tracer": None}
@@ -40,6 +41,10 @@ class Vec:
     def __mod__(self, o): return self._bin(o, operator.mod)
     def __and__(self, o): return self._bin(o, operator.and_)
     def __or__(self, o): return self._bin(o, operator.or_)
+    def __lshift__(self, o): return self._bin(o, operator.lshift)
+    def __rshift__(self, o): return self._bin(o, operator.rshift)
+    def __rlshift__(self, o): return self._rbin(o, operator.lshift)
+    def __rrshift__(self, o): return self._rbin(o, operator.rshift)
     def __lt__(self, o): return self._bin(o, operator.lt)
     def __le__(self, o): return self._bin(o, operator.le)
     def __gt__(self, o): return self._bin(o, operator.gt)
@@ -107,3 +112,150 @@ def store(pointer: Pointer, value, mask=None) -> None:
     ok = True if mask is None else (mask.data[0] if isinstance(mask, Vec) else mask)
     if ok:
         pointer.buffer[pointer.offset] = value.data[0] if isinstance(value, Vec) else value
+
+
+def _map(function, value):
+    if isinstance(value, Vec):
+        return Vec(function(a) for a in value.data)
+    return function(value)
+
+
+def _combine(function, left, right):
+    if isinstance(left, Vec):
+        return left._bin(right, function)
+    if isinstance(right, Vec):
+        return right._rbin(left, function)
+    return function(left, right)
+
+
+def _exp(value):
+    try:
+        return math.exp(value)
+    except OverflowError:
+        return math.inf
+
+
+def _log(value):
+    if value == 0:
+        return -math.inf
+    return math.log(value) if value > 0 else math.nan
+
+
+def _sqrt(value):
+    return math.sqrt(value) if value >= 0 else math.nan
+
+
+def _rsqrt(value):
+    root = _sqrt(value)
+    return 1.0 / root if root else math.inf
+
+
+def exp(value):
+    if _ctx["tracer"] is not None:
+        return _ctx["tracer"].unary("exp", value)
+    return _map(_exp, value)
+
+
+def log(value):
+    if _ctx["tracer"] is not None:
+        return _ctx["tracer"].unary("log", value)
+    return _map(_log, value)
+
+
+def sqrt(value):
+    if _ctx["tracer"] is not None:
+        return _ctx["tracer"].unary("sqrt", value)
+    return _map(_sqrt, value)
+
+
+def rsqrt(value):
+    if _ctx["tracer"] is not None:
+        return _ctx["tracer"].unary("rsqrt", value)
+    return _map(_rsqrt, value)
+
+
+def maximum(left, right):
+    if _ctx["tracer"] is not None:
+        return _ctx["tracer"].binary("maximum", left, right)
+    return _combine(max, left, right)
+
+
+def minimum(left, right):
+    if _ctx["tracer"] is not None:
+        return _ctx["tracer"].binary("minimum", left, right)
+    return _combine(min, left, right)
+
+
+def _matrix_unavailable():
+    raise NotImplementedError("simdgroup matrices need a Metal device: launch the kernel with Buffers")
+
+
+def matrix_fill(value, element):
+    if _ctx["tracer"] is None:
+        _matrix_unavailable()
+    return _ctx["tracer"].matrix_fill(value, element)
+
+
+def matrix_load(pointer, stride, transpose=False):
+    if _ctx["tracer"] is None:
+        _matrix_unavailable()
+    return _ctx["tracer"].matrix_load(pointer, stride, transpose)
+
+
+def matrix_mma(left, right, accumulator):
+    if _ctx["tracer"] is None:
+        _matrix_unavailable()
+    return _ctx["tracer"].matrix_mma(left, right, accumulator)
+
+
+def matrix_elements(matrix):
+    if _ctx["tracer"] is None:
+        _matrix_unavailable()
+    return _ctx["tracer"].matrix_elements(matrix)
+
+
+def matrix_make(first, second, element=None):
+    if _ctx["tracer"] is None:
+        _matrix_unavailable()
+    return _ctx["tracer"].matrix_make(first, second, element)
+
+
+def shuffle_xor(value, mask):
+    if _ctx["tracer"] is not None:
+        return _ctx["tracer"].shuffle_xor(value, mask)
+    if isinstance(value, Vec):
+        return Vec(value.data[index ^ mask] for index in range(len(value.data)))
+    return value
+
+
+def where(condition, left, right):
+    if _ctx["tracer"] is not None:
+        return _ctx["tracer"].where(condition, left, right)
+    if isinstance(condition, Vec):
+        length = len(condition)
+        return Vec(a if flag else b for flag, a, b in zip(condition.data, _lanes(left, length), _lanes(right, length)))
+    return left if condition else right
+
+
+def cast(value, dtype):
+    if _ctx["tracer"] is not None:
+        return _ctx["tracer"].cast(value, dtype)
+    convert = float if dtype.kind == "float" else bool if dtype.kind == "bool" else int
+    return _map(convert, value)
+
+
+def loop(count, init, body):
+    if _ctx["tracer"] is not None:
+        return _ctx["tracer"].loop(count, init, body)
+    carried = tuple(init)
+    if isinstance(count, Vec):
+        for index in range(max(count.data, default=0)):
+            result = body(index, *carried)
+            result = tuple(result) if isinstance(result, (tuple, list)) else (result,)
+            active = Vec(index < limit for limit in count.data)
+            carried = tuple(where(active, new, old) for new, old in zip(result, carried))
+        return carried
+    for index in range(count):
+        result = body(index, *carried)
+        carried = tuple(result) if isinstance(result, (tuple, list)) else (result,)
+    return carried
