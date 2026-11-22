@@ -145,9 +145,10 @@ class Buffer:
 
     @classmethod
     def from_list(cls, dtype, values):
+        values = list(values)
         buffer = cls(dtype, len(values))
-        arr = (dtype.ctype * len(values))(*values)
-        ctypes.memmove(buffer.contents_ptr(), arr, buffer.nbytes)
+        raw = dtype.pack(values)
+        ctypes.memmove(buffer.contents_ptr(), raw, len(raw))
         return buffer
 
     def contents_ptr(self) -> int:
@@ -155,8 +156,7 @@ class Buffer:
 
     def to_list(self) -> list:
         synchronize()
-        arr = (self.dtype.ctype * self.n).from_address(self.contents_ptr())
-        return list(arr)
+        return self.dtype.unpack(ctypes.string_at(self.contents_ptr(), self.nbytes), self.n)
 
 
 def _triple(size):

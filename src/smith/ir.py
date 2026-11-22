@@ -1,16 +1,27 @@
-from .dtype import bool_, float32, int32, uint32
+from .dtype import bfloat16, bool_, float16, float32, int8, int16, int32, int64, uint8, uint16, uint32, uint64
 
-RANK = {bool_: 0, uint32: 1, int32: 2, float32: 3}
+RANK = {bool_: 0, int8: 1, uint8: 1, int16: 2, uint16: 2, int32: 3, uint32: 3, int64: 4, uint64: 4,
+        float16: 5, bfloat16: 5, float32: 6}
 ARITHMETIC = ("add", "sub", "mul", "truediv", "floordiv", "mod")
 BITWISE = ("and", "or")
 COMPARISONS = ("less", "less_equal", "greater", "greater_equal")
 BINARY = ARITHMETIC + BITWISE + COMPARISONS
 LEAVES = ("const", "argument", "buffer", "program_id", "program_count", "lane")
+INTEGERS = {("int", 8): int8, ("int", 16): int16, ("int", 32): int32, ("int", 64): int64,
+            ("uint", 8): uint8, ("uint", 16): uint16, ("uint", 32): uint32, ("uint", 64): uint64}
 
 
 def promote(*dtypes):
-    result = max(dtypes, key=RANK.__getitem__)
-    return result if RANK[result] >= RANK[int32] else int32
+    floats = {dtype for dtype in dtypes if dtype.kind == "float"}
+    if floats:
+        if floats == {float16, bfloat16}:
+            return float32
+        return max(floats, key=RANK.__getitem__)
+    integers = [dtype for dtype in dtypes if dtype.kind in ("int", "uint")]
+    if not integers:
+        return int32
+    kind = "int" if any(dtype.kind == "int" for dtype in integers) else "uint"
+    return INTEGERS[(kind, max(dtype.bits for dtype in integers))]
 
 
 class Node:
