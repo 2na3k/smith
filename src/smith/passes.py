@@ -1,7 +1,7 @@
 import math
 import operator
 
-from .dtype import bool_, float32, int32, uint32
+from .dtype import bool_, float32
 from .ir import BINARY, COMPARISONS, Graph
 
 FOLDABLE = {
@@ -18,21 +18,23 @@ FOLDABLE = {
 
 
 def _wrap(value, dtype):
-    if dtype == int32:
-        return (value + 2**31) % 2**32 - 2**31
-    return value & 0xFFFFFFFF
+    modulus = 1 << dtype.bits
+    value %= modulus
+    if dtype.kind == "int" and value >= modulus // 2:
+        value -= modulus
+    return value
 
 
 def _convert(value, dtype):
-    if dtype == float32:
-        return float(value)
+    if dtype.kind == "float":
+        return dtype.unpack(dtype.pack([value]), 1)[0]
     if dtype == bool_:
         return bool(value)
     return _wrap(int(value), dtype)
 
 
 def _convertible(value, dtype):
-    return not (dtype in (int32, uint32) and isinstance(value, float) and not math.isfinite(value))
+    return not (dtype.kind in ("int", "uint") and isinstance(value, float) and not math.isfinite(value))
 
 
 def _is_value(node, value):

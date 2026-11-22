@@ -1,6 +1,6 @@
 import math
 
-from .dtype import bool_, float32, uint32
+from .dtype import bool_, float16, float32
 from .ir import LEAVES, live_nodes
 
 SYMBOLS = {
@@ -17,18 +17,34 @@ SYMBOLS = {
 }
 
 
+LITERAL_SUFFIXES = {"int32": "", "uint32": "u", "int64": "l", "uint64": "ul"}
+
+
+def _float32_text(value):
+    if math.isnan(value):
+        return "NAN"
+    if math.isinf(value):
+        return "INFINITY" if value > 0 else "(-INFINITY)"
+    text = f"{value!r}f"
+    return f"({text})" if value < 0 else text
+
+
 def _literal(node):
-    value = node.arg
-    if node.dtype == bool_:
+    value, dtype = node.arg, node.dtype
+    if dtype == bool_:
         return "true" if value else "false"
-    if node.dtype == float32:
-        if math.isnan(value):
-            return "NAN"
-        if math.isinf(value):
-            return "INFINITY" if value > 0 else "(-INFINITY)"
-        text = f"{value!r}f"
+    if dtype.kind == "float":
+        if dtype == float32:
+            return _float32_text(value)
+        if dtype == float16 and math.isfinite(value):
+            return f"({value!r}h)" if value < 0 else f"{value!r}h"
+        return f"{dtype.msl}({_float32_text(value)})"
+    if dtype.name in LITERAL_SUFFIXES:
+        if dtype.name == "int64" and value == -2**63:
+            return "(-9223372036854775807l - 1l)"
+        text = f"{value}{LITERAL_SUFFIXES[dtype.name]}"
     else:
-        text = f"{value}u" if node.dtype == uint32 else str(value)
+        text = f"{dtype.msl}({value})"
     return f"({text})" if value < 0 else text
 
 
