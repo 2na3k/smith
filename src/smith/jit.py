@@ -3,11 +3,13 @@
 With plain Python lists the kernel runs once per program in Python.
 With Metal buffers the kernel is traced into Metal source, compiled, and run on the GPU.
 """
+import contextlib
 import ctypes
 import inspect
 import itertools
 import sys
 
+from . import viz
 from .ops import _ctx, Pointer
 from .trace import trace_kernel
 
@@ -27,6 +29,16 @@ def _uses_metal(args, kwargs):
         return False
     from .compiler import Buffer
     return any(isinstance(value, Buffer) for value in (*args, *kwargs.values()))
+
+
+@contextlib.contextmanager
+def batch():
+    if sys.platform != "darwin":
+        yield None
+        return
+    from .compiler import batch as device_batch
+    with device_batch() as active:
+        yield active
 
 
 def synchronize():
@@ -66,7 +78,10 @@ class JITFunction:
         key = tuple((name, value if name in constexprs else getattr(value, "dtype", type(value)))
                     for name, value in values.items())
         if key not in self.programs:
-            self.programs[key] = trace_kernel(self.function, values, constexprs)
+            with viz.span("trace", self.__name__) as active:
+                self.programs[key] = trace_kernel(self.function, values, constexprs)
+                active.key = (self.programs[key].name, self.programs[key].source)
+        viz.record_program(self.programs[key])
         return self.programs[key]
 
     def _bind(self, args, kwargs):

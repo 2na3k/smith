@@ -158,8 +158,10 @@ def is_buffer(value):
 
 
 class Program:
-    def __init__(self, source, name, lanes, runtime_names, graph, buffers, scalars):
+    def __init__(self, source, name, lanes, runtime_names, graph, buffers, scalars, traced=None, constexprs=None):
         self.source = source
+        self.traced = traced
+        self.constexprs = constexprs or {}
         self.name = name
         self.lanes = lanes
         self.runtime_names = runtime_names
@@ -171,7 +173,16 @@ class Program:
         self.stored = frozenset(n.inputs[0].arg for n in walk(graph) if n.op == "store")
 
 
+RESERVED_NAMES = frozenset({
+    "double", "float", "half", "bfloat", "int", "uint", "short", "ushort", "char", "uchar", "long", "ulong", "bool",
+    "void", "kernel", "vertex", "fragment", "device", "constant", "threadgroup", "thread", "main", "struct", "class",
+    "namespace", "using", "if", "else", "for", "while", "do", "return", "switch", "case", "default", "template",
+})
+
+
 def trace_kernel(function, values, constexpr_names) -> Program:
+    if function.__name__ in RESERVED_NAMES:
+        raise ValueError(f"{function.__name__!r} is a reserved word in Metal and cannot name a kernel: rename the function")
     tracer = Tracer()
     parameters, runtime_names, call = [], [], {}
     buffers, scalars = {}, {}
@@ -210,4 +221,5 @@ def trace_kernel(function, values, constexpr_names) -> Program:
     ]
     graph = simplify(tracer.graph)
     name = function.__name__
-    return Program(render_metal(graph, name, parameters), name, tracer.lanes or 1, runtime_names, graph, buffers, scalars)
+    return Program(render_metal(graph, name, parameters), name, tracer.lanes or 1, runtime_names, graph, buffers, scalars,
+                   tracer.graph, {key: values[key] for key in constexpr_names if key in values})

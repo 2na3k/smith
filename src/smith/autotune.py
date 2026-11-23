@@ -6,6 +6,7 @@ import os
 import statistics
 import tempfile
 
+from . import viz
 from .jit import JITFunction, _uses_metal, synchronize
 
 
@@ -110,12 +111,15 @@ class Autotuner:
         path = _cache_path(self.kernel.__name__)
         if text not in self.memory:
             record = _read_json(path).get(text)
-            if not self._valid_record(record):
-                record = self._tune(grid, args, kwargs, values)
+            cached = self._valid_record(record)
+            if not cached:
+                with viz.phase("tuning"):
+                    record = self._tune(grid, args, kwargs, values)
                 entries = _read_json(path)
                 entries[text] = record
                 _write_json(path, entries)
             self.memory[text] = record
+            viz.record_autotune(self.kernel.__name__, text, record, cached)
 
         record = self.memory[text]
         self.best_config = Config(**record["config"])

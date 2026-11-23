@@ -109,6 +109,14 @@ class TestInterpreter(unittest.TestCase):
 
 
 class TestGraph(unittest.TestCase):
+    def test_reserved_metal_names_are_rejected_with_a_clear_error(self):
+        @sth.jit
+        def double(out_pointer):
+            sth.store(out_pointer + 0, 1.0)
+
+        with self.assertRaisesRegex(ValueError, "reserved word in Metal"):
+            double.trace(BufferSpec(dtype.float32))
+
     def test_loop_buffers_are_reported(self):
         program = row_sum.trace(BufferSpec(dtype.float32), BufferSpec(dtype.float32), 10, 7, BLOCK=8)
         self.assertEqual(program.loaded, {"x_pointer"})

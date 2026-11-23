@@ -1,0 +1,762 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>smith viz</title>
+<style>
+:root {
+  --bg: #12141a; --panel: #1a1d26; --panel2: #212532; --line: #2c3142; --text: #d7dae5; --muted: #8b91a7;
+  --accent: #6aa9ff; --good: #5fd38d; --warn: #f2b84b; --bad: #ff6b6b;
+  --leaf: #4b5266; --memory: #3f78c9; --matrix: #9a66d6; --loop: #d98a2b; --math: #3ea66b; --store: #c94f4f; --cast: #6a7a8f;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+header { display: flex; align-items: center; gap: 16px; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header b { color: var(--accent); font-size: 15px; }
+header .grow { flex: 1; }
+#live.on { color: var(--good); } #live.off { color: var(--bad); }
+#app { display: flex; height: calc(100% - 38px); }
+nav { width: 270px; min-width: 270px; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 8px 0; }
+nav h4 { margin: 12px 14px 4px; color: var(--muted); font-weight: normal; text-transform: uppercase; font-size: 11px; letter-spacing: .08em; }
+nav .item { padding: 6px 14px; cursor: pointer; border-left: 3px solid transparent; }
+nav .item:hover { background: var(--panel2); }
+nav .item.active { background: var(--panel2); border-left-color: var(--accent); }
+nav .item .sub { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+main { flex: 1; overflow: auto; padding: 14px 18px; }
+h2 { margin: 0 0 10px; font-size: 16px; }
+h3 { margin: 18px 0 8px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.tabs { display: flex; gap: 4px; margin: 10px 0 14px; border-bottom: 1px solid var(--line); }
+.tab { padding: 6px 14px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 16px; min-width: 130px; }
+.card .value { font-size: 20px; color: var(--accent); }
+.card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 4px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: normal; font-size: 11px; text-transform: uppercase; }
+td.num, th.num { text-align: right; }
+tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--panel2); }
+.chip { display: inline-block; padding: 1px 8px; margin: 0 4px 4px 0; border-radius: 10px; background: var(--panel2); border: 1px solid var(--line); }
+.chip.good { border-color: var(--good); color: var(--good); } .chip.bad { border-color: var(--bad); color: var(--bad); }
+button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 10px; cursor: pointer; font: inherit; }
+button:hover { border-color: var(--accent); } button.active { border-color: var(--accent); color: var(--accent); }
+pre.source { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 0; margin: 0; overflow: auto; }
+pre.source .line { display: block; padding: 0 14px 0 0; }
+pre.source .num { display: inline-block; width: 48px; text-align: right; padding-right: 12px; color: var(--muted); user-select: none; }
+.kw { color: #c792ea; } .ty { color: #82aaff; } .fn { color: #ffcb6b; } .nm { color: #f78c6c; } .pp { color: #89ddff; }
+.graphbox { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: auto; max-height: 62vh; }
+.crumbs { margin: 8px 0; color: var(--muted); } .crumbs a { color: var(--accent); cursor: pointer; }
+.detail { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin-top: 10px; min-height: 40px; }
+.legend span { display: inline-block; margin-right: 12px; } .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
+.bar { height: 10px; border-radius: 2px; background: var(--accent); display: inline-block; vertical-align: middle; }
+.bar.best { background: var(--good); }
+.muted { color: var(--muted); } .good { color: var(--good); } .bad { color: var(--bad); }
+.empty { color: var(--muted); padding: 30px; text-align: center; }
+svg text { font: 11px ui-monospace, Menlo, monospace; fill: #fff; }
+svg .axis text { fill: var(--muted); }
+.bar { cursor: pointer; }
+.bar rect { stroke: none; }
+.bar:hover rect { stroke: #fff; stroke-width: 1.5; filter: brightness(1.3); }
+.bar.rel rect { stroke: #fff; stroke-width: 1; stroke-dasharray: 3 2; }
+.bar.sel rect { stroke: #fff; stroke-width: 2.5; }
+#tip { display: none; position: fixed; z-index: 10; max-width: 460px; pointer-events: none; background: #0b0d12; border: 1px solid var(--accent); border-radius: 6px; padding: 8px 10px; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+.tiphead i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+.tipfoot { margin-top: 4px; font-size: 11px; }
+table.facts { width: auto; } table.facts td { border: 0; padding: 1px 14px 1px 0; white-space: normal; }
+</style>
+</head>
+<body>
+<header>
+  <b>smith viz</b>
+  <span id="summary" class="muted"></span>
+  <span class="grow"></span>
+  <span id="live" class="off">&#9679; connecting</span>
+</header>
+<div id="app"><nav id="sidebar"></nav><main id="main"></main></div>
+<div id="tip"></div>
+<script>
+const app = {
+  data: null, details: {}, view: { type: "overview" }, tab: "source", stage: "simplified",
+  graphPath: [], selected: null, selectedBar: null, chartItems: [], showTuning: false, showCandidates: false, zoom: 1, compress: true, showCores: true, selectedLaunch: null,
+};
+
+const escapeHtml = (text) => String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ms = (value, digits = 3) => (value === null || value === undefined ? "-" : value.toFixed(digits) + " ms");
+const fmtTime = (value) => {
+  if (value === null || value === undefined) return "-";
+  if (value < 0.1) return (value * 1000).toFixed(value < 0.01 ? 1 : 0) + " us";
+  return value < 100 ? value.toFixed(2) + " ms" : value.toFixed(0) + " ms";
+};
+const pct = (value) => (value === null || value === undefined ? "-" : (value * 100).toFixed(0) + "%");
+const colors = ["#6aa9ff", "#5fd38d", "#ff7eb6", "#b4e04a", "#cbd5e1", "#7dd3c0", "#f0abfc", "#94a3b8"];
+const colorOf = (index) => colors[index % colors.length];
+
+async function api(path) {
+  const response = await fetch(path);
+  if (!response.ok) throw new Error(path + " " + response.status);
+  return response.json();
+}
+
+async function poll() {
+  const live = document.getElementById("live");
+  try {
+    const data = await api("/api/state");
+    live.className = "on"; live.innerHTML = "&#9679; live";
+    if (!app.data || data.version !== app.data.version) { app.data = data; render(); }
+  } catch (error) { live.className = "off"; live.innerHTML = "&#9679; disconnected"; }
+}
+
+function hashOf() {
+  const view = app.view;
+  if (view.type === "kernel") return `#kernel/${view.id}/${app.tab}/${app.stage}`;
+  return "#" + view.type;
+}
+
+function writeHash() { history.replaceState(null, "", hashOf()); }
+
+function applyHash() {
+  const parts = location.hash.replace(/^#/, "").split("/");
+  if (parts[0] === "kernel" && parts[1] !== undefined) {
+    app.view = { type: "kernel", id: Number(parts[1]) };
+    if (parts[2]) app.tab = parts[2];
+    if (parts[3]) app.stage = parts[3];
+  } else if (["timeline", "autotune"].includes(parts[0])) app.view = { type: parts[0] };
+  else app.view = { type: "overview" };
+}
+
+function displayName(program) {
+  const same = app.data.programs.filter((other) => !other.candidate && other.name === program.name);
+  if (program.candidate || same.length < 2) return program.name;
+  const keys = Object.keys(program.constexprs).filter((key) => new Set(same.map((other) => other.constexprs[key])).size > 1);
+  return keys.length ? `${program.name} [${keys.map((key) => `${key}=${program.constexprs[key]}`).join(" ")}]` : program.name;
+}
+
+function select(view) { app.view = view; app.graphPath = []; app.selected = null; writeHash(); render(); }
+
+function setTab(tab) { app.tab = tab; writeHash(); renderMain(); }
+
+function setStage(stage) { app.stage = stage; app.graphPath = []; app.selected = null; writeHash(); renderMain(); }
+
+function render() {
+  const data = app.data;
+  const runs = data.launches.filter((row) => row.phase === "run" && row.batch_size === undefined);
+  const total = data.launches.filter((row) => row.phase === "run").reduce((sum, row) => sum + (row.ms || 0), 0);
+  const kernels = data.programs.filter((program) => !program.candidate).length;
+  document.getElementById("summary").textContent =
+    `${kernels} kernels | ${runs.length} launches | ${ms(total, 2)} GPU` +
+    (data.autotunes.length ? ` | ${data.autotunes.length} tuned` : "");
+  renderSidebar(); renderMain();
+}
+
+function renderSidebar() {
+  const data = app.data, active = (type, id) => (app.view.type === type && app.view.id === id ? " active" : "");
+  let html = `<h4>Views</h4>
+    <div class="item${active("overview")}" onclick="select({type:'overview'})">Overview</div>
+    <div class="item${active("timeline")}" onclick="select({type:'timeline'})">CPU / GPU timeline</div>`;
+  if (data.autotunes.length)
+    html += `<div class="item${active("autotune")}" onclick="select({type:'autotune'})">Autotune <span class="muted">(${data.autotunes.length})</span></div>`;
+  const item = (program) => {
+    const constants = Object.entries(program.constexprs).map(([k, v]) => `${k}=${v}`).join(" ");
+    return `<div class="item${active("kernel", program.id)}" onclick="select({type:'kernel',id:${program.id}})">
+      ${escapeHtml(displayName(program))} <span class="muted">${program.launches}x ${program.mean_ms === null ? "" : ms(program.mean_ms, 3)}</span>
+      <div class="sub">${escapeHtml(constants)}</div></div>`;
+  };
+  const kernels = data.programs.filter((program) => !program.candidate), candidates = data.programs.filter((program) => program.candidate);
+  html += `<h4>Kernels</h4>`;
+  if (!kernels.length) html += `<div class="item muted">no kernels traced yet</div>`;
+  html += kernels.map(item).join("");
+  if (candidates.length) {
+    html += `<h4 style="cursor:pointer" onclick="app.showCandidates=!app.showCandidates;renderSidebar()">${app.showCandidates ? "&#9662;" : "&#9656;"} Tuning candidates (${candidates.length})</h4>`;
+    if (app.showCandidates) html += candidates.map(item).join("");
+  }
+  document.getElementById("sidebar").innerHTML = html;
+}
+
+async function renderMain() {
+  const main = document.getElementById("main"), view = app.view;
+  if (view.type === "overview") main.innerHTML = overviewHtml();
+  else if (view.type === "timeline") { main.innerHTML = timelineHtml(); showSelectedLaunch(); }
+  else if (view.type === "autotune") main.innerHTML = autotuneHtml();
+  else if (view.type === "kernel") {
+    if (!app.details[view.id]) app.details[view.id] = await api("/api/program/" + view.id);
+    main.innerHTML = kernelHtml(app.details[view.id]);
+    if (app.tab === "ir") drawGraphView(app.details[view.id]);
+    if (app.tab === "runs") showSelectedLaunch();
+  }
+}
+
+function overviewHtml() {
+  const data = app.data;
+  const runs = data.launches.filter((row) => row.phase === "run" && row.batch_size === undefined);
+  const busy = data.launches.filter((row) => row.phase === "run" && row.ms !== undefined).reduce((sum, row) => sum + row.ms, 0);
+  const tuning = data.launches.filter((row) => row.phase === "tuning").length;
+  const kernels = data.programs.filter((program) => !program.candidate);
+  let html = `<h2>Overview</h2><div class="cards">
+    <div class="card"><div class="value">${kernels.length}</div><div class="label">kernels</div></div>
+    <div class="card"><div class="value">${runs.length}</div><div class="label">launches</div></div>
+    <div class="card"><div class="value">${ms(busy, 2)}</div><div class="label">gpu busy</div></div>
+    <div class="card"><div class="value">${ms(data.span_ms, 2)}</div><div class="label">gpu span</div></div>
+    <div class="card"><div class="value">${tuning}</div><div class="label">tuning launches</div></div></div>`;
+  if (!kernels.length) return html + `<div class="empty">Nothing recorded yet. Trace or launch a kernel.</div>`;
+  html += `<table><tr><th>kernel</th><th class="num">launches</th><th class="num">total</th><th class="num">mean</th>
+    <th class="num">min</th><th class="num">max</th><th class="num">compile</th><th class="num">threadgroups</th>
+    <th class="num">idle cores</th><th class="num">SIMD lanes</th><th class="num">IR nodes</th></tr>`;
+  for (const program of kernels)
+    html += `<tr class="clickable" onclick="select({type:'kernel',id:${program.id}})"><td>${escapeHtml(displayName(program))}
+      <div class="muted" style="font-size:11px;white-space:normal;max-width:340px">${escapeHtml(Object.entries(program.constexprs).map(([k, v]) => `${k}=${v}`).join(" "))}</div></td>
+      <td class="num">${program.launches}</td><td class="num">${ms(program.total_ms)}</td><td class="num">${ms(program.mean_ms)}</td>
+      <td class="num">${ms(program.min_ms)}</td><td class="num">${ms(program.max_ms)}</td><td class="num">${ms(program.compile_ms, 1)}</td>
+      <td class="num">${program.groups === null ? "-" : program.groups}</td>
+      <td class="num ${program.idle_cores > 0 ? "bad" : ""}">${program.idle_cores === null ? "-" : program.idle_cores + "/" + data.hardware.gpu_cores}</td>
+      <td class="num">${pct(program.simd_efficiency)}</td>
+      <td class="num">${program.nodes.traced} &rarr; ${program.nodes.simplified}</td></tr>`;
+  return html + `</table>`;
+}
+
+const BASE_LANES = [
+  ["trace", "host: tracing"], ["compile", "host: compiling"], ["encode", "host: encode + submit"], ["wait", "host: blocked until GPU reports done"],
+  ["bridge", "host: mlx bridge call"], ["queue", "queue (submit to GPU)"], ["gpu", "GPU kernels"],
+];
+const SPAN_COLORS = { wait: "#f2b84b", trace: "#a78bfa", compile: "#fb923c", bridge: "#d4d4d8" };
+const HOST_LEGEND = [["#22d3ee", "host encode + submit"], ["#6b7188", "queue wait (submit to GPU start)"], ["#f2b84b", "host blocked in waitUntilCompleted"],
+  ["#a78bfa", "tracing"], ["#fb923c", "compiling"], ["#d4d4d8", "mlx bridge call"]];
+
+const kv = (pairs) => pairs.filter(([, value]) => value !== undefined && value !== null && value !== "");
+const at = (value) => `t=${value.toFixed(3)} ms`;
+
+function launchFacts(row) {
+  return kv([["GPU time", fmtTime(row.ms)], ["GPU window", `${at(row.start)} to ${at(row.end)}`], ["grid", row.grid.join(" x ")],
+    ["threadgroup", row.group.join(" x ") + ` = ${row.threads_per_group} threads`], ["threadgroups", row.groups],
+    ["queue latency", fmtTime(row.queue_ms)], ["idle cores (modeled)", row.idle_cores === undefined ? undefined : `${row.idle_cores} of ${app.data.hardware.gpu_cores}`],
+    ["SIMD lanes used", row.simd_efficiency === undefined ? undefined : pct(row.simd_efficiency)]]);
+}
+
+function timelineItems(launches, spans, cores) {
+  const items = [];
+  const names = [...new Set(launches.filter((row) => row.ms !== undefined).map((row) => row.name + " " + row.program))];
+  for (const row of launches) {
+    const label = `${row.name} #${row.id}`;
+    if (row.ms === undefined) {
+      items.push({ lane: "encode", start: row.encode_start, end: row.encode_end, color: "#22d3ee", label: fmtTime(row.encode_ms),
+        info: { head: label, tag: "host: encode into a batch",
+          what: "The CPU recorded this dispatch into a command buffer that is still open. Nothing has been sent to the GPU yet: the whole batch is committed once, later, so this is only the cost of calling setComputePipelineState / setBuffer / dispatchThreads, with unchanged bindings skipped.",
+          facts: kv([["host time", fmtTime(row.encode_ms)], ["started", at(row.encode_start)], ["grid", row.grid.join(" x ")], ["threadgroup", row.group.join(" x ")]]) } });
+      continue;
+    }
+    const color = colorOf(names.indexOf(row.name + " " + row.program));
+    items.push({ lane: "gpu", start: row.start, end: row.end, color, launch: row.id, label: fmtTime(row.ms),
+      info: { head: label, tag: row.batch_size ? `GPU: batch of ${row.batch_size} kernels` : "GPU kernel",
+        what: row.batch_size
+          ? `${row.batch_size} dispatches encoded into one command buffer and run back to back. Metal timestamps a command buffer only as a whole, so this bar covers all of them; it cannot be split per kernel.`
+          : "One kernel running on the GPU, from Metal's GPUStartTime to GPUEndTime. This is real GPU time on the same clock as the host lanes, so you can line it up with what the CPU was doing.",
+        facts: launchFacts(row) } });
+    if (row.queue_ms > 0) items.push({ lane: "queue", start: row.submit, end: row.start, color: "#6b7188", label: fmtTime(row.queue_ms), launch: row.id,
+      info: { head: label, tag: "queue wait",
+        what: "The command buffer was committed but the GPU had not started it yet. Roughly 40 to 50 us is the floor on Apple GPUs (driver and scheduler wake-up); more than that means earlier work was still running ahead of it, or the GPU was waking from idle (the first launch after a pause is often a few ms).",
+        facts: kv([["waited", fmtTime(row.queue_ms)], ["committed at", at(row.submit)], ["GPU started at", at(row.start)]]) } });
+    items.push({ lane: "encode", start: row.encode_start, end: row.encode_end, color: "#22d3ee", label: fmtTime(row.encode_ms), launch: row.id,
+      info: { head: label, tag: row.batch_size ? "host: commit the batch" : "host: encode + submit",
+        what: row.batch_size
+          ? "The CPU ended encoding and committed the whole batch to the command queue. This is the one submit paid for all the dispatches in the batch."
+          : "The CPU, in Python and Metal, created a command buffer and encoder, bound the pipeline, buffers and scalar arguments, dispatched the grid, then committed. The call returns without waiting for the GPU.",
+        facts: kv([["host time", fmtTime(row.encode_ms)], ["started", at(row.encode_start)], ["committed", at(row.submit)]]) } });
+    if (cores && row.core_loads) {
+      const top = Math.max(...row.core_loads);
+      row.core_loads.forEach((load, index) => {
+        if (load > 0) items.push({ lane: "core:" + index, start: row.start, end: row.end, color, launch: row.id, opacity: 0.35 + 0.65 * load / top,
+          label: row.name.slice(0, 10) + " " + fmtTime(row.ms),
+          info: { head: `${label} on core ${index}`, tag: "GPU core (modeled)",
+            what: "Not a measurement: Metal exposes no per-core counters. Threadgroups are dealt round-robin to the cores, and a core is drawn busy for the kernel's whole duration if it gets at least one. Fainter means fewer threadgroups than the busiest core.",
+            facts: kv([["threadgroups on this core", `${load} of ${row.groups}`], ["busiest core has", top], ["kernel time", fmtTime(row.ms)]]) } });
+      });
+    }
+  }
+  for (const item of spans)
+    items.push({ lane: item.kind, start: item.start, end: item.end, color: SPAN_COLORS[item.kind] || "#888",
+      label: fmtTime(item.ms), info: spanInfo(item) });
+  return items;
+}
+
+const SPAN_WHAT = {
+  trace: "Python ran your @jit function once with symbolic values to record it as IR. The result is cached per set of constexpr values, so you pay this only on the first call.",
+  compile: "The simplified IR was rendered to Metal source and compiled to a pipeline state by the Metal compiler. Cached per kernel, so repeat launches skip it.",
+  bridge: "A call through mx.fast.metal_kernel, which runs the kernel inside MLX. MLX owns the timing, so only this host span is shown and there is no GPU bar.",
+  wait: "The CPU thread called waitUntilCompleted (from wait(), reading a buffer, or synchronize()) and sat blocked until Metal signalled completion. The GPU does the work while the CPU is blocked here.",
+};
+
+function spanInfo(item) {
+  const facts = [["host time", fmtTime(item.ms)], ["window", `${at(item.start)} to ${at(item.end)}`]];
+  if (item.kind === "wait" && item.launch !== null && item.finished_before !== null) {
+    facts.push(["waiting on run", "#" + item.launch]);
+    facts.push(item.finished_before >= 0 ? ["kernel state", `already finished ${fmtTime(item.finished_before)} before the wait began`]
+      : ["kernel state", `still running ${fmtTime(-item.finished_before)} after the wait began`]);
+    facts.push(["return lag", `${fmtTime(item.notify_lag)} after the GPU finished (completion signal latency)`]);
+  }
+  return { head: item.label, tag: "host: " + item.kind, what: SPAN_WHAT[item.kind] || "", facts };
+}
+
+function buildWarp(items) {
+  const intervals = items.map((item) => [item.start, item.end]).sort((a, b) => a[0] - b[0]);
+  const clusters = [];
+  for (const [start, end] of intervals) {
+    const last = clusters[clusters.length - 1];
+    if (last && (!app.compress || start - last.end <= 1.0)) last.end = Math.max(last.end, end);
+    else clusters.push({ start, end });
+  }
+  const visualGap = app.compress ? 1.5 : 0;
+  let offset = 0;
+  clusters.forEach((cluster) => { cluster.offset = offset; offset += cluster.end - cluster.start + visualGap; });
+  const warp = (time) => {
+    let chosen = clusters[0];
+    for (const cluster of clusters) if (time >= cluster.start - 1e-9) chosen = cluster;
+    return chosen.offset + Math.min(time, chosen.end) - chosen.start;
+  };
+  return { clusters, warp, total: Math.max(offset - visualGap, 1e-6) };
+}
+
+function coreStats(launches, clusters, cores) {
+  const busy = new Array(cores).fill(0);
+  let used = 0, available = 0;
+  for (const row of launches) {
+    if (!row.core_loads || row.ms === undefined) continue;
+    row.core_loads.forEach((load, index) => { if (load > 0) busy[index] += row.ms; });
+    used += row.core_loads.filter((load) => load > 0).length * row.ms;
+    available += cores * row.ms;
+  }
+  let window = 0;
+  for (const cluster of clusters) {
+    const inside = launches.filter((row) => row.start >= cluster.start - 1e-9 && row.end <= cluster.end + 1e-9);
+    if (inside.length) window += Math.max(...inside.map((row) => row.end)) - Math.min(...inside.map((row) => row.start));
+  }
+  return { busy, window, use: available ? used / available : null };
+}
+
+function buildChart(launches, spans) {
+  const hardware = app.data.hardware, cores = hardware.gpu_cores || 0;
+  const items = timelineItems(launches, spans, app.showCores ? cores : 0), { clusters, warp, total } = buildWarp(items);
+  const usage = coreStats(launches, clusters, cores);
+  const coreLanes = app.showCores && cores && items.some((item) => item.lane.startsWith("core:"))
+    ? Array.from({ length: cores }, (_, index) => ["core:" + index, `core ${index}  ${pct(usage.window ? usage.busy[index] / usage.window : null)}`]) : [];
+  const lanes = [...BASE_LANES.filter(([id]) => items.some((item) => item.lane === id)), ...coreLanes];
+  const heightOf = (id) => (id.startsWith("core:") ? 20 : 28), left = 210, top = 26;
+  const width = Math.max(700, document.getElementById("main").clientWidth - 48) * app.zoom;
+  const scale = (width - left - 20) / total;
+  const offsets = new Map();
+  let used = 0;
+  for (const [id] of lanes) {
+    const ends = [];
+    for (const item of items.filter((candidate) => candidate.lane === id).sort((a, b) => a.start - b.start)) {
+      if (id.startsWith("core:")) { item.sub = 0; ends[0] = 1; continue; }
+      const x0 = warp(item.start) * scale, x1 = Math.max(x0 + 2, warp(item.end) * scale) + 1;
+      let sub = ends.findIndex((end) => end <= x0);
+      if (sub < 0) { sub = ends.length; ends.push(0); }
+      ends[sub] = x1; item.sub = sub;
+    }
+    const rows = Math.max(1, ends.length);
+    offsets.set(id, { y: top + used, rows, height: heightOf(id) });
+    used += rows * heightOf(id);
+  }
+  const height = top + used + 18;
+  let svg = `<svg width="${width}" height="${height}">`;
+  clusters.forEach((cluster, index) => {
+    const x0 = left + cluster.offset * scale, x1 = left + (cluster.offset + cluster.end - cluster.start) * scale;
+    svg += `<rect x="${x0}" y="${top - 4}" width="${x1 - x0}" height="${used + 4}" fill="#171a23"/>
+      <text x="${x0 + 3}" y="11" style="fill:#8b91a7">t=${cluster.start.toFixed(cluster.start < 10 ? 2 : 0)} ms</text>`;
+    if (index > 0) {
+      const gap = cluster.start - clusters[index - 1].end, gx = left + (cluster.offset - 0.75) * scale;
+      if (app.compress) svg += `<line x1="${gx}" x2="${gx}" y1="${top - 6}" y2="${height - 14}" stroke="#f2b84b" stroke-dasharray="3 3"/>
+        <text x="${gx + 3}" y="${height - 3}" style="fill:#f2b84b">idle ${fmtTime(gap)}</text>`;
+    }
+  });
+  lanes.forEach(([id, label]) => {
+    const { y, rows, height: laneHeight } = offsets.get(id), isCore = id.startsWith("core:");
+    svg += `<line x1="0" x2="${width - 10}" y1="${y + rows * laneHeight - 1}" y2="${y + rows * laneHeight - 1}" stroke="${isCore ? "#1d2130" : "#2c3142"}"/>
+      <text x="6" y="${y + laneHeight - 8}" style="fill:${isCore ? "#9aa3bf" : "#d7dae5"}">${escapeHtml(label)}</text>`;
+    for (const item of items.filter((candidate) => candidate.lane === id)) {
+      const x = left + warp(item.start) * scale, w = Math.max(1.5, (warp(item.end) - warp(item.start)) * scale), rowY = y + item.sub * laneHeight;
+      svg += `<g class="bar${barKey(item) === app.selectedBar ? " sel" : ""}" data-i="${items.indexOf(item)}" ${item.launch !== undefined ? `data-launch="${item.launch}"` : ""}>
+        <rect x="${x}" y="${rowY + 2}" width="${w}" height="${laneHeight - 5}" rx="2" fill="${item.color}" opacity="${item.opacity === undefined ? 1 : item.opacity}"/>
+        ${w > item.label.length * 6.8 + 10 ? `<text x="${x + 4}" y="${rowY + laneHeight - 7}" style="fill:#0b0d12;font-weight:600;pointer-events:none">${item.label}</text>` : ""}</g>`;
+    }
+  });
+  app.chartItems = items;
+  return { svg: svg + `</svg>`, usage, cores };
+}
+
+const barKey = (item) => `${item.lane}|${item.start.toFixed(4)}|${item.end.toFixed(4)}`;
+
+function infoHtml(item, full) {
+  const info = item.info, rows = info.facts.map(([label, value]) => `<tr><td class="muted">${escapeHtml(label)}</td><td>${escapeHtml(value)}</td></tr>`).join("");
+  return `<div class="tiphead"><i style="background:${item.color}"></i><b>${escapeHtml(info.head)}</b> <span class="muted">${escapeHtml(info.tag)}</span></div>
+    ${full ? `<p>${escapeHtml(info.what)}</p>` : ""}<table class="facts">${rows}</table>${full ? "" : `<div class="muted tipfoot">click for an explanation</div>`}`;
+}
+
+function barOf(target) {
+  const node = target.closest && target.closest("[data-i]");
+  return node && app.chartItems ? { node, item: app.chartItems[Number(node.dataset.i)] } : null;
+}
+
+function relate(node, on) {
+  const root = node ? node.closest("svg") : document.querySelector("#main svg");
+  if (!root) return;
+  root.querySelectorAll(".rel").forEach((other) => other.classList.remove("rel"));
+  if (on && node.dataset.launch !== undefined) root.querySelectorAll(`[data-launch="${node.dataset.launch}"]`).forEach((other) => { if (other !== node) other.classList.add("rel"); });
+}
+
+function showTip(event) {
+  const tip = document.getElementById("tip"), hit = barOf(event.target);
+  if (!hit) { tip.style.display = "none"; relate(null, false); return; }
+  if (tip.dataset.i !== hit.node.dataset.i) { tip.innerHTML = infoHtml(hit.item, false); tip.dataset.i = hit.node.dataset.i; relate(hit.node, true); }
+  tip.style.display = "block";
+  const x = Math.min(event.clientX + 16, window.innerWidth - tip.offsetWidth - 8), y = Math.min(event.clientY + 16, window.innerHeight - tip.offsetHeight - 8);
+  tip.style.left = Math.max(4, x) + "px"; tip.style.top = Math.max(4, y) + "px";
+}
+
+function hideTip() { const tip = document.getElementById("tip"); tip.style.display = "none"; tip.dataset.i = ""; relate(null, false); }
+
+function clickBar(event) {
+  const hit = barOf(event.target);
+  if (!hit) return;
+  app.selectedBar = barKey(hit.item);
+  if (hit.item.launch !== undefined) app.selectedLaunch = hit.item.launch;
+  document.querySelectorAll("#main .bar.sel").forEach((node) => node.classList.remove("sel"));
+  hit.node.classList.add("sel");
+  showSelectedBar();
+  if (hit.item.launch !== undefined) showSelectedLaunch();
+}
+
+function showSelectedBar() {
+  const box = document.getElementById("bar-detail");
+  if (!box) return;
+  const item = (app.chartItems || []).find((candidate) => barKey(candidate) === app.selectedBar);
+  box.innerHTML = item ? infoHtml(item, true) : `<span class="muted">Hover any bar for its numbers, click it to see what it is.</span>`;
+}
+
+function chartControls(extra) {
+  const button = (active, action, label) => `<button class="${active ? "active" : ""}" onclick="${action}">${label}</button>`;
+  return `<p>${button(app.compress, "app.compress=!app.compress;renderMain()", "compress idle gaps")}
+    ${button(app.showCores, "app.showCores=!app.showCores;renderMain()", "per-core lanes")}
+    ${button(false, "app.zoom=Math.max(.25,app.zoom/2);renderMain()", "zoom out")}
+    ${button(false, "app.zoom=Math.min(64,app.zoom*2);renderMain()", "zoom in")}
+    ${button(app.showTuning, "app.showTuning=!app.showTuning;renderMain()", "tuning launches")}
+    <span class="muted"> ${extra}</span></p>`;
+}
+
+function chartNote() {
+  const legend = HOST_LEGEND.map(([color, label]) => `<span style="display:inline-block;margin-right:14px"><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color};margin-right:5px"></i>${label}</span>`).join("");
+  return `<p class="muted"><span style="display:block;margin-bottom:6px">GPU kernel bars use one color per kernel (blue, green, pink, ...). Host-side colors: ${legend}</span>${app.compress ? "Idle gaps over 1 ms are collapsed (dashed lines); everything inside a burst is to real scale." : "Real time scale."}
+    Click any bar for its launch details. <b>Core lanes are modeled</b>: a core is drawn busy for a kernel's whole duration when the round-robin model gives it at least one
+    threadgroup, and fainter when it holds fewer threadgroups than the busiest core; an empty core lane means no threadgroup was assigned to it. Metal exposes no per-core timing.
+    The percentage on each core is its busy time over the time GPU kernels were running.</p>`;
+}
+
+function timelineHtml() {
+  const data = app.data, stats = data.stats, hardware = data.hardware;
+  const launches = data.launches.filter((row) => app.showTuning || row.phase === "run");
+  const spans = data.spans.filter((item) => app.showTuning || item.phase === "run");
+  if (!launches.length && !spans.length) return `<h2>CPU / GPU timeline</h2><div class="empty">No completed launches yet.</div>`;
+  const chart = buildChart(launches, spans);
+  return `<h2>CPU / GPU timeline</h2>
+    <div class="cards">
+      <div class="card"><div class="value">${pct(stats.duty_cycle)}</div><div class="label">gpu duty cycle (busy / busy + gaps)</div></div>
+      <div class="card"><div class="value">${fmtTime(stats.gpu_busy_ms)}</div><div class="label">gpu busy</div></div>
+      <div class="card"><div class="value">${pct(chart.usage.use)}</div><div class="label">cores in use while kernels run (modeled)</div></div>
+      <div class="card"><div class="value">${fmtTime(stats.mean_queue_ms)}</div><div class="label">mean queue latency</div></div>
+      <div class="card"><div class="value">${chart.cores || "?"}</div><div class="label">${escapeHtml(hardware.chip || "gpu")} cores</div></div></div>
+    ${chartControls(`${launches.filter((row) => row.member_of === undefined && !row.batch_size).length + launches.filter((row) => row.member_of !== undefined).length} kernel launches${launches.some((row) => row.batch_size) ? ` (${launches.filter((row) => row.batch_size).length} committed as ${launches.filter((row) => row.batch_size).length === 1 ? "a batch" : "batches"})` : ""}, ${spans.length} host spans`)}
+    <div class="graphbox" style="max-height:none">${chart.svg}</div>
+    <div class="detail" id="bar-detail" style="margin-top:10px"></div>${chartNote()}
+    <div class="detail" id="launch-detail" style="margin-bottom:16px"></div>
+    <h3>GPU idle gaps (largest first) and what the host was doing</h3>${gapsTable(data)}`;
+}
+
+function coreStrip(row) {
+  if (!row.core_loads) return "-";
+  const top = Math.max(...row.core_loads), size = 9;
+  return `<svg width="${row.core_loads.length * (size + 1)}" height="14">${row.core_loads.map((load, index) =>
+    `<rect x="${index * (size + 1)}" y="1" width="${size}" height="12" rx="2" fill="${load === 0 ? "#ff6b6b" : "#6aa9ff"}" opacity="${load === 0 ? 0.55 : 0.3 + 0.7 * load / top}"><title>core ${index}: ${load} threadgroups (modeled)</title></rect>`).join("")}</svg>`;
+}
+
+function runsHtml(program) {
+  const data = app.data, hardware = data.hardware;
+  const rows = data.launches.filter((row) => row.program === program.id && (app.showTuning || row.phase === "run"));
+  const spans = data.spans.filter((item) => item.program === program.id && (app.showTuning || item.phase === "run"));
+  if (!rows.some((row) => row.ms !== undefined)) return `<div class="empty">No completed runs of this kernel yet.</div>`;
+  const chart = buildChart(rows, spans), timed = rows.filter((row) => row.ms !== undefined), runs = timed.filter((row) => row.phase === "run");
+  const mean = (key) => (runs.length ? runs.reduce((sum, row) => sum + row[key], 0) / runs.length : null);
+  const last = timed[timed.length - 1], kernelCount = runs.reduce((sum, row) => sum + (row.batch_size || 1), 0);
+  let html = `<div class="cards">
+      <div class="card"><div class="value">${runs.length}</div><div class="label">runs${kernelCount !== runs.length ? ` (${kernelCount} kernels, batched)` : ""}</div></div>
+      <div class="card"><div class="value">${fmtTime(mean("ms"))}</div><div class="label">mean gpu time</div></div>
+      <div class="card"><div class="value">${fmtTime(mean("queue_ms"))}</div><div class="label">mean queue latency</div></div>
+      <div class="card"><div class="value">${fmtTime(mean("encode_ms"))}</div><div class="label">mean host encode</div></div>
+      <div class="card"><div class="value">${last.groups}</div><div class="label">threadgroups per run</div></div>
+      <div class="card"><div class="value ${last.idle_cores > 0 ? "bad" : ""}">${last.idle_cores === undefined ? "-" : last.idle_cores + " / " + chart.cores}</div><div class="label">idle cores (modeled)</div></div>
+      <div class="card"><div class="value">${pct(chart.usage.use)}</div><div class="label">core use while running</div></div></div>
+    ${chartControls(`${timed.length} runs, ${spans.length} host spans for ${escapeHtml(program.name)}`)}
+    <div class="graphbox" style="max-height:none">${chart.svg}</div>
+    <div class="detail" id="bar-detail" style="margin-top:10px"></div>${chartNote()}
+    <div class="detail" id="launch-detail" style="margin-bottom:16px"></div>
+    <h3>Every run</h3><table><tr><th>#</th><th class="num">start</th><th class="num">host encode</th><th class="num">queue</th><th class="num">gpu time</th>
+    <th class="num">threadgroups</th><th class="num">idle cores</th><th>cores (modeled)</th><th class="num">SIMD lanes</th><th>phase</th></tr>`;
+  for (const row of timed.slice(-200))
+    html += `<tr class="clickable" onclick="selectLaunch(${row.id})"><td>${row.id}</td><td class="num">${ms(row.start, 3)}</td><td class="num">${fmtTime(row.encode_ms)}</td>
+      <td class="num">${fmtTime(row.queue_ms)}</td><td class="num">${ms(row.ms, 4)}${row.batch_size ? ` <span class="muted">(batch of ${row.batch_size})</span>` : ""}</td><td class="num">${row.groups}</td>
+      <td class="num ${row.idle_cores > 0 ? "bad" : ""}">${row.idle_cores === undefined ? "-" : row.idle_cores}</td><td>${coreStrip(row)}</td>
+      <td class="num">${pct(row.simd_efficiency)}</td><td>${row.phase}</td></tr>`;
+  return html + `</table>${timed.length > 200 ? `<p class="muted">showing the last 200 of ${timed.length}</p>` : ""}`;
+}
+
+function selectLaunch(id) { app.selectedLaunch = id; renderMain(); }
+
+function gapsTable(data) {
+  const gaps = [...data.gaps].sort((a, b) => b.ms - a.ms).slice(0, 10);
+  if (!gaps.length) return `<div class="muted">no idle gaps between launches</div>`;
+  let html = `<table><tr><th>between</th><th class="num">gap</th><th>host activity during the gap</th></tr>`;
+  for (const gap of gaps) {
+    const causes = Object.entries(gap.causes).map(([kind, value]) => `<span class="chip">${escapeHtml(kind)} ${fmtTime(value)}</span>`).join("");
+    html += `<tr><td>#${gap.from} &rarr; #${gap.to} ${escapeHtml(gap.name)}</td><td class="num">${fmtTime(gap.ms)}</td><td>${causes}</td></tr>`;
+  }
+  return html + `</table>`;
+}
+
+function coreGrid(row, hardware) {
+  if (!row.core_loads) return `<div class="muted">GPU core count unknown on this machine, so core use cannot be modeled.</div>`;
+  const loads = row.core_loads, top = Math.max(...loads), columns = Math.min(8, loads.length), size = 38, gap = 6;
+  const rows = Math.ceil(loads.length / columns);
+  let svg = `<svg width="${columns * (size + gap)}" height="${rows * (size + gap)}">`;
+  loads.forEach((load, index) => {
+    const x = (index % columns) * (size + gap), y = Math.floor(index / columns) * (size + gap);
+    const fill = load === 0 ? "#3a1f24" : `rgba(106,169,255,${0.3 + 0.7 * load / top})`;
+    svg += `<rect x="${x}" y="${y}" width="${size}" height="${size}" rx="4" fill="${fill}" stroke="${load === 0 ? "#ff6b6b" : "none"}"><title>core ${index}: ${load} threadgroups (modeled)</title></rect>
+      <text x="${x + size / 2}" y="${y + size / 2 + 4}" text-anchor="middle">${load === 0 ? "idle" : load}</text>`;
+  });
+  return svg + `</svg>`;
+}
+
+function launchDetail(row, hardware) {
+  const cores = hardware.gpu_cores;
+  let verdict = "";
+  if (row.idle_cores > 0) verdict = `<span class="bad">${row.idle_cores} of ${cores} cores have no threadgroup at all: they are idle for the whole kernel.</span> Launch at least ${cores} threadgroups.`;
+  else if (row.groups < cores * 4) verdict = `<span class="good">every core gets work</span>, ${row.groups} threadgroups over ${cores} cores; modeled core efficiency ${pct(row.core_efficiency)}${row.core_efficiency < 0.95 ? " (the last round is not full)" : ""}.`;
+  else verdict = `<span class="good">${row.groups} threadgroups over ${cores} cores</span>: plenty of work to balance (${pct(row.core_efficiency)} modeled).`;
+  const lanes = row.simd_efficiency < 1 ? `<span class="bad">${pct(row.simd_efficiency)} of SIMD lanes used</span> (${row.threads_per_group} threads is not a multiple of 32)` : `all 32 SIMD lanes used`;
+  return `<b>${escapeHtml(row.name)} #${row.id}</b> <span class="muted">grid ${row.grid.join("x")} group ${row.group.join("x")}</span>
+    <div style="display:flex;gap:30px;margin-top:10px;flex-wrap:wrap"><div>${coreGrid(row, hardware)}</div>
+    <div style="min-width:380px"><table>
+      <tr><td>host encode + submit</td><td class="num">${fmtTime(row.encode_ms)}</td></tr>
+      <tr><td>queue latency (submit to GPU start)</td><td class="num">${fmtTime(row.queue_ms)}</td></tr>
+      <tr><td>GPU execution</td><td class="num"><b>${fmtTime(row.ms)}</b></td></tr></table>
+      ${row.batch_size ? `<p class="muted">Batch of ${row.batch_size} kernels committed together: Metal reports GPU time for the whole command buffer, so this time covers all of them.</p>` : ""}
+      <p>${verdict}</p><p>${row.threads_per_group} threads per group = ${row.simd_groups} SIMD groups: ${lanes}.</p>
+      <p class="muted">Core loads are modeled by dealing threadgroups round-robin to ${cores} cores. Metal does not expose per-core counters, so this is an estimate from the launch shape, not a measurement.</p></div></div>`;
+}
+
+function showSelectedLaunch() {
+  showSelectedBar();
+  const box = document.getElementById("launch-detail");
+  if (!box) return;
+  const rows = app.data.launches.filter((row) => row.ms !== undefined && (app.showTuning || row.phase === "run") &&
+    (app.view.type !== "kernel" || row.program === app.view.id));
+  let row = rows.find((candidate) => candidate.id === app.selectedLaunch);
+  if (!row && rows.length) { row = [...rows].sort((a, b) => b.ms - a.ms)[0]; app.selectedLaunch = row.id; }
+  box.innerHTML = row ? launchDetail(row, app.data.hardware) : "no completed launches to inspect";
+}
+
+function niceStep(raw) {
+  const power = Math.pow(10, Math.floor(Math.log10(raw || 1))), fraction = raw / power;
+  return (fraction < 1.5 ? 1 : fraction < 3.5 ? 2 : fraction < 7.5 ? 5 : 10) * power;
+}
+
+function longestTable(rows) {
+  const top = [...rows].sort((a, b) => b.ms - a.ms).slice(0, 12);
+  let html = `<table><tr><th>#</th><th>kernel</th><th class="num">gpu time</th><th>grid</th><th>group</th><th>phase</th></tr>`;
+  for (const row of top)
+    html += `<tr><td>${row.id}</td><td>${escapeHtml(row.name)}</td><td class="num">${ms(row.ms, 4)}</td><td>${row.grid.join("x")}</td><td>${row.group.join("x")}</td><td>${row.phase}</td></tr>`;
+  return html + `</table>`;
+}
+
+function autotuneHtml() {
+  let html = `<h2>Autotune</h2>`;
+  for (const entry of app.data.autotunes) {
+    const valid = entry.results.filter((r) => r.seconds !== null).sort((a, b) => a.seconds - b.seconds);
+    const failed = entry.results.filter((r) => r.seconds === null);
+    const best = valid.length ? valid[0].seconds : 1;
+    let key = entry.key;
+    try { key = JSON.stringify(JSON.parse(entry.key).key); } catch (error) {}
+    html += `<h3 style="text-transform:none;font-size:14px;color:var(--text)">${escapeHtml(entry.kernel)} <span class="muted">${escapeHtml(key)}</span>
+      <span class="chip ${entry.cached ? "" : "good"}">${entry.cached ? "from cache" : "tuned now"}</span></h3>
+      <div>best: ${Object.entries(entry.best).map(([k, v]) => `<span class="chip good">${k}=${v}</span>`).join("")}</div>
+      <table><tr><th>config</th><th class="num">time</th><th class="num">vs best</th><th></th></tr>`;
+    for (const result of valid) {
+      const relative = result.seconds / best;
+      html += `<tr><td>${Object.entries(result.config).map(([k, v]) => `${k}=${v}`).join(" ")}</td>
+        <td class="num">${ms(result.seconds * 1e3, 4)}</td><td class="num">${relative.toFixed(2)}x</td>
+        <td><span class="bar ${relative === 1 ? "best" : ""}" style="width:${Math.max(2, 220 / relative)}px"></span></td></tr>`;
+    }
+    for (const result of failed)
+      html += `<tr><td>${Object.entries(result.config).map(([k, v]) => `${k}=${v}`).join(" ")}</td><td colspan="3" class="bad">${escapeHtml(result.error || "failed")}</td></tr>`;
+    html += `</table>`;
+  }
+  return html;
+}
+
+function kernelHtml(program) {
+  const summary = app.data.programs[program.id];
+  const tabs = [["source", "Metal source"], ["ir", "IR graph"], ["runs", "Runs + cores"], ["signature", "Signature"]];
+  let html = `<h2>${escapeHtml(displayName(summary))} <span class="muted">${program.lanes} lanes per program</span></h2>
+    <div>${Object.entries(program.constexprs).map(([k, v]) => `<span class="chip">${k}=${escapeHtml(v)}</span>`).join("")}
+    ${program.uses_matrices ? `<span class="chip">simdgroup matrices</span>` : ""}
+    <span class="chip">${summary.launches} launches</span>${summary.mean_ms === null ? "" : `<span class="chip">mean ${ms(summary.mean_ms, 4)}</span>`}
+    ${program.compile_ms === null ? "" : `<span class="chip">compiled in ${ms(program.compile_ms, 1)}</span>`}</div>
+    <div class="tabs">${tabs.map(([id, label]) => `<div class="tab ${app.tab === id ? "active" : ""}" onclick="setTab('${id}')">${label}</div>`).join("")}</div>`;
+  if (app.tab === "source") html += sourceHtml(program);
+  else if (app.tab === "ir") html += irHtml(program);
+  else if (app.tab === "runs") html += runsHtml(program);
+  else html += signatureHtml(program);
+  return html;
+}
+
+function highlight(line) {
+  let text = escapeHtml(line);
+  text = text.replace(/^(#include.*)$/, '<span class="pp">$1</span>');
+  text = text.replace(/\b(kernel|void|for|if|else|return|using|namespace|const|device|constant|threadgroup)\b/g, '<span class="kw">$1</span>');
+  text = text.replace(/\b(int|uint|uint3|float|half|bfloat|char|uchar|short|ushort|long|ulong|bool|ulong2|simdgroup_\w+)\b/g, '<span class="ty">$1</span>');
+  text = text.replace(/\b(simdgroup_load|simdgroup_multiply_accumulate|make_filled_simdgroup_matrix|simd_shuffle_xor|thread_elements|exp|log|sqrt|rsqrt|max|min|floor|fmod)\b/g, '<span class="fn">$1</span>');
+  return text;
+}
+
+function sourceHtml(program) {
+  const lines = program.source.replace(/\n$/, "").split("\n");
+  return `<pre class="source">${lines.map((line, index) => `<span class="line"><span class="num">${index + 1}</span>${highlight(line)}</span>`).join("")}</pre>`;
+}
+
+function signatureHtml(program) {
+  let html = `<h3>Buffers</h3><table><tr><th>name</th><th>dtype</th><th>role</th></tr>`;
+  for (const [name, dtype] of Object.entries(program.buffers)) {
+    const loaded = program.loaded.includes(name), stored = program.stored.includes(name);
+    html += `<tr><td>${name}</td><td>${dtype}</td><td>${loaded && stored ? "read + write" : stored ? "output" : loaded ? "input" : "unused"}</td></tr>`;
+  }
+  html += `</table><h3>Scalars</h3><table><tr><th>name</th><th>dtype</th></tr>`;
+  for (const [name, dtype] of Object.entries(program.scalars)) html += `<tr><td>${name}</td><td>${dtype}</td></tr>`;
+  html += `</table><h3>Constexpr values (baked into the source)</h3>`;
+  html += Object.entries(program.constexprs).map(([k, v]) => `<span class="chip">${k}=${escapeHtml(v)}</span>`).join("") || `<span class="muted">none</span>`;
+  const counts = program.op_counts;
+  html += `<h3>Ops per stage</h3><table><tr><th>op</th><th class="num">traced</th><th class="num">simplified</th></tr>`;
+  for (const op of [...new Set([...Object.keys(counts.traced), ...Object.keys(counts.simplified)])].sort()) {
+    const before = counts.traced[op] || 0, after = counts.simplified[op] || 0;
+    html += `<tr><td>${op}</td><td class="num">${before}</td><td class="num ${after < before ? "good" : ""}">${after}</td></tr>`;
+  }
+  return html + `</table>`;
+}
+
+function irHtml(program) {
+  const stages = program.stages, traced = stages.traced.nodes.length, simplified = stages.simplified.nodes.length;
+  return `<div><button class="${app.stage === "traced" ? "active" : ""}" onclick="setStage('traced')">traced (${traced} live nodes)</button>
+    <button class="${app.stage === "simplified" ? "active" : ""}" onclick="setStage('simplified')">simplified (${simplified} live nodes)</button>
+    <span class="muted"> ${stages.traced.total} nodes built, ${traced - simplified} removed by simplify</span></div>
+    <div class="legend muted" style="margin-top:8px">
+      <span><i style="background:var(--leaf)"></i>leaf / const</span><span><i style="background:var(--memory)"></i>memory</span>
+      <span><i style="background:var(--matrix)"></i>matrix</span><span><i style="background:var(--loop)"></i>loop</span>
+      <span><i style="background:var(--math)"></i>math</span><span><i style="background:var(--cast)"></i>cast</span><span><i style="background:var(--store)"></i>store</span></div>
+    <div class="crumbs" id="crumbs"></div><div class="graphbox" id="graph"></div><div class="detail" id="detail">click a node</div>`;
+}
+
+function currentGraph(program) {
+  let graph = program.stages[app.stage];
+  for (const id of app.graphPath) graph = graph.nodes.find((node) => node.id === id).body;
+  return graph;
+}
+
+function nodeColor(node) {
+  const op = node.op;
+  if (op === "store") return "var(--store)";
+  if (op === "loop" || op === "loop_result") return "var(--loop)";
+  if (op.startsWith("matrix")) return "var(--matrix)";
+  if (op === "load") return "var(--memory)";
+  if (op === "cast") return "var(--cast)";
+  if (["const", "argument", "buffer", "program_id", "program_count", "lane", "capture", "loop_index", "carried"].includes(op)) return "var(--leaf)";
+  return "var(--math)";
+}
+
+function nodeLabel(node) {
+  return node.op + (node.arg !== null ? "[" + node.arg + "]" : "");
+}
+
+function drawGraphView(program) {
+  const graph = currentGraph(program), crumbs = document.getElementById("crumbs"), box = document.getElementById("graph");
+  let path = `<a onclick="app.graphPath=[];app.selected=null;renderMain()">kernel</a>`;
+  app.graphPath.forEach((id, depth) => {
+    path += ` &rsaquo; <a onclick="app.graphPath=app.graphPath.slice(0,${depth + 1});app.selected=null;renderMain()">loop %${id}</a>`;
+  });
+  crumbs.innerHTML = path + ` <span class="muted">(${graph.nodes.length} nodes)</span>`;
+  if (graph.nodes.length > 600) {
+    box.innerHTML = `<div class="empty">${graph.nodes.length} nodes is too many to draw. Open a loop body, or read the list below.</div>` + nodeTable(graph);
+    return;
+  }
+  const byId = new Map(graph.nodes.map((node) => [node.id, node])), depth = new Map(), order = [];
+  for (const node of graph.nodes) {
+    const sources = node.inputs.filter((id) => byId.has(id));
+    depth.set(node.id, sources.length ? 1 + Math.max(...sources.map((id) => depth.get(id))) : 0);
+  }
+  const columns = [];
+  for (const node of graph.nodes) (columns[depth.get(node.id)] = columns[depth.get(node.id)] || []).push(node);
+  const position = new Map(), widths = [], rowGap = 34, columnGap = 56;
+  columns.forEach((column, d) => {
+    const centers = (node) => {
+      const ys = node.inputs.filter((id) => position.has(id)).map((id) => position.get(id).row);
+      return ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : 1e9;
+    };
+    column.sort((a, b) => centers(a) - centers(b) || a.id - b.id);
+    widths[d] = Math.max(...column.map((node) => nodeLabel(node).length * 7 + 20));
+    column.forEach((node, row) => position.set(node.id, { row, d }));
+  });
+  const xs = []; let x = 10;
+  widths.forEach((w, d) => { xs[d] = x; x += w + columnGap; });
+  const width = x + 10, height = Math.max(...columns.map((c) => c.length)) * rowGap + 20;
+  let svg = `<svg width="${width}" height="${height}">`, edges = "", boxes = "";
+  for (const node of graph.nodes) {
+    const here = position.get(node.id), nx = xs[here.d], ny = 10 + here.row * rowGap;
+    for (const id of node.inputs) {
+      if (!position.has(id)) continue;
+      const from = position.get(id), fx = xs[from.d] + widths[from.d], fy = 10 + from.row * rowGap + 12;
+      const hot = app.selected === node.id || app.selected === id;
+      edges += `<path d="M${fx},${fy} C${fx + 30},${fy} ${nx - 30},${ny + 12} ${nx},${ny + 12}" fill="none" stroke="${hot ? "#6aa9ff" : "#3a4157"}" stroke-width="${hot ? 1.8 : 1}"/>`;
+    }
+    boxes += `<g style="cursor:pointer" onclick="selectNode(${node.id})"><rect x="${nx}" y="${ny}" width="${widths[here.d]}" height="24" rx="4"
+      fill="${nodeColor(node)}" stroke="${app.selected === node.id ? "#fff" : "none"}"/><text x="${nx + 8}" y="${ny + 16}">${escapeHtml(nodeLabel(node))}</text></g>`;
+  }
+  box.innerHTML = svg + edges + boxes + `</svg>`;
+  showDetail(program);
+}
+
+function selectNode(id) { app.selected = id; const program = app.details[app.view.id]; drawGraphView(program); }
+
+function showDetail(program) {
+  const graph = currentGraph(program), node = graph.nodes.find((n) => n.id === app.selected), box = document.getElementById("detail");
+  if (!node) { box.textContent = "click a node"; return; }
+  let html = `<b>%${node.id}</b> ${escapeHtml(node.op)}${node.arg !== null ? " [" + escapeHtml(node.arg) + "]" : ""}
+    <span class="muted">${node.dtype || "no value"}</span><br>inputs: ${node.inputs.map((id) => `%${id}`).join(", ") || "none"}`;
+  if (node.body) html += `<br><button onclick="app.graphPath.push(${node.id});app.selected=null;renderMain()">open loop body (${node.body.nodes.length} nodes)</button>`;
+  box.innerHTML = html;
+}
+
+function nodeTable(graph) {
+  let html = `<table><tr><th>id</th><th>op</th><th>dtype</th><th>inputs</th></tr>`;
+  for (const node of graph.nodes.slice(0, 800))
+    html += `<tr><td>%${node.id}</td><td>${escapeHtml(nodeLabel(node))}</td><td>${node.dtype || ""}</td><td>${node.inputs.map((i) => "%" + i).join(" ")}</td></tr>`;
+  return html + `</table>`;
+}
+
+applyHash();
+const mainBox = document.getElementById("main");
+mainBox.addEventListener("mousemove", showTip);
+mainBox.addEventListener("mouseleave", hideTip);
+mainBox.addEventListener("scroll", hideTip);
+mainBox.addEventListener("click", clickBar);
+setInterval(poll, 1000);
+poll();
+</script>
+</body>
+</html>
