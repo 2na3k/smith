@@ -126,7 +126,7 @@ def _rewrite(graph, node, inputs):
                 inputs = inputs[:3]
             elif _is_false(inputs[3]):
                 return None
-    return graph.node(op, inputs, node.arg, dtype, unique=op == "store")
+    return graph.node(op, inputs, node.arg, dtype, unique=op in ("store", "barrier", "copy"))
 
 
 def _simplify(graph):

@@ -2,7 +2,7 @@ import itertools
 import math
 
 from .dtype import bool_, float16, float32
-from .ir import LEAVES, MATRIX, live_nodes
+from .ir import LEAVES, MATRIX, live_nodes, walk
 
 SYMBOLS = {
     "add": "+",
@@ -54,6 +54,8 @@ def _literal(node):
 def metal_leaf(node):
     if node.op in ("argument", "buffer"):
         return node.arg
+    if node.op == "shared":
+        return node.arg[0]
     if node.op == "program_id":
         return f"int(program_id.{'xyz'[node.arg]})"
     if node.op == "program_count":
@@ -110,6 +112,16 @@ def _store(node, names, leaf):
     buffer, offset, value, *mask = [_reference(i, names, leaf) for i in node.inputs]
     assignment = f"{buffer}[{offset}] = {value};"
     return f"if ({mask[0]}) {{ {assignment} }}" if mask else assignment
+
+
+COPY_TYPES = {32: "uint", 64: "uint2", 128: "uint4"}
+
+
+def _copy(node, names, leaf):
+    destination, destination_offset, source, source_offset = [_reference(i, names, leaf) for i in node.inputs]
+    vector = COPY_TYPES[node.inputs[0].dtype.bits * node.arg]
+    return (f"*(threadgroup {vector}*)(&{destination}[{destination_offset}]) = "
+            f"*(device const {vector}*)(&{source}[{source_offset}]);")
 
 
 def _inner_leaf(loop_id, capture_references, outer_leaf):
@@ -172,6 +184,10 @@ def _render(graph, leaf, counter, roots=()):
             continue
         if node.op == "store":
             lines.append(_store(node, names, leaf))
+        elif node.op == "barrier":
+            lines.append("threadgroup_barrier(mem_flags::mem_threadgroup);")
+        elif node.op == "copy":
+            lines.append(_copy(node, names, leaf))
         elif node.op == "loop":
             loops[node.index], loop_lines = _loop(node, names, leaf, counter)
             lines.extend(loop_lines)
@@ -188,8 +204,16 @@ def _render(graph, leaf, counter, roots=()):
     return lines, names
 
 
+def shared_declarations(graph):
+    seen = {}
+    for node in walk(graph):
+        if node.op == "shared":
+            seen[node.arg[0]] = f"threadgroup {node.dtype.msl} {node.arg[0]}[{node.arg[1]}];"
+    return list(seen.values())
+
+
 def render_statements(graph, leaf=metal_leaf):
-    return _render(graph, leaf, itertools.count(1))[0]
+    return shared_declarations(graph) + _render(graph, leaf, itertools.count(1))[0]
 
 
 def render_metal(graph, name, parameters):

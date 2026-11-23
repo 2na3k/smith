@@ -91,6 +91,47 @@ class TestAutotuneMetal(CacheDirectoryCase):
         self.assertTrue(all(result["seconds"] is not None and result["seconds"] >= 0.0
                             for result in tuner.results))
 
+    def test_fast_math_is_part_of_the_cache_key_and_reaches_the_compiler(self):
+        n = 16
+        x = Buffer.from_list(dtype.float32, [1.0] * n)
+        y = Buffer.from_list(dtype.float32, [2.0] * n)
+        out = Buffer.from_list(dtype.float32, [0.0] * n)
+        grid = lambda meta: (sth.cdiv(n, meta["BLOCK"]),)
+        modes = []
+        original = compiler.compile_msl
+
+        def spy(source, name, fast_math=True):
+            modes.append(fast_math)
+            return original(source, name, fast_math)
+
+        with mock.patch("smith.compiler.compile_msl", spy):
+            fast = self.make_tuner(add, [2, 4])
+            precise = self.make_tuner(add, [2, 4], fast_math=False)
+            fast[grid](x, y, out, n)
+            precise[grid](x, y, out, n)
+        self.assertIn(True, modes)
+        self.assertIn(False, modes)
+        self.assertEqual(out.to_list(), [3.0] * n)
+        with open(self.cache_file("add")) as handle:
+            self.assertEqual(len(json.load(handle)), 2)
+
+    def test_finalists_are_remeasured_and_decide_the_winner(self):
+        n = 16
+        x = Buffer.from_list(dtype.float32, [1.0] * n)
+        y = Buffer.from_list(dtype.float32, [2.0] * n)
+        out = Buffer.from_list(dtype.float32, [0.0] * n)
+        tuner = self.make_tuner(add, [2, 4, 8, 16], finalists=2)
+        tuner[lambda meta: (sth.cdiv(n, meta["BLOCK"]),)](x, y, out, n)
+        refined = [result for result in tuner.results if result["refined"] is not None]
+        self.assertEqual(len(refined), 2)
+        self.assertEqual(tuner.best_config.values, min(refined, key=lambda result: result["refined"])["config"])
+        self.assertEqual(sorted(result["seconds"] for result in tuner.results)[:2],
+                         sorted(result["seconds"] for result in refined))
+
+    def test_finalists_must_be_positive(self):
+        with self.assertRaises(ValueError):
+            Autotuner(add, configs_from_grid({"BLOCK": [2]}), key=("n",), finalists=0)
+
     def test_cache_hit_does_not_rebenchmark(self):
         n = 16
         x = Buffer.from_list(dtype.float32, [1.0] * n)

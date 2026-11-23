@@ -31,9 +31,10 @@ def configs_from_grid(options):
     return [Config(**dict(zip(names, combination))) for combination in combinations]
 
 
-def autotune(configs, key, restore=(), warmup=2, repeat=5):
+def autotune(configs, key, restore=(), warmup=2, repeat=5, fast_math=True, finalists=3):
     def decorator(jit_function):
-        return Autotuner(jit_function, configs, key, restore=restore, warmup=warmup, repeat=repeat)
+        return Autotuner(jit_function, configs, key, restore=restore, warmup=warmup, repeat=repeat,
+                         fast_math=fast_math, finalists=finalists)
     return decorator
 
 
@@ -71,13 +72,13 @@ def _failure_types():
 
 
 class Autotuner:
-    def __init__(self, kernel, configs, key, restore=(), warmup=2, repeat=5):
+    def __init__(self, kernel, configs, key, restore=(), warmup=2, repeat=5, fast_math=True, finalists=3):
         if not isinstance(kernel, JITFunction):
             raise TypeError("autotune must decorate a @smith.jit function")
         if not configs:
             raise ValueError("autotune needs at least one config")
-        if repeat < 1 or warmup < 0:
-            raise ValueError("autotune needs repeat >= 1 and warmup >= 0")
+        if repeat < 1 or warmup < 0 or finalists < 1:
+            raise ValueError("autotune needs repeat >= 1, warmup >= 0 and finalists >= 1")
         unknown = [name for name in key if name not in kernel.signature.parameters]
         if unknown:
             raise ValueError(f"autotune key names unknown parameters: {unknown}")
@@ -87,6 +88,8 @@ class Autotuner:
         self.restore = tuple(restore)
         self.warmup = warmup
         self.repeat = repeat
+        self.fast_math = fast_math
+        self.finalists = finalists
         self.memory = {}
         self.best_config = None
         self.results = []
@@ -130,7 +133,7 @@ class Autotuner:
         from .compiler import Buffer
         parameters = {name: values[name] for name in self.key}
         dtypes = {name: value.dtype.name for name, value in values.items() if isinstance(value, Buffer)}
-        return json.dumps({"key": parameters, "dtypes": dtypes}, sort_keys=True, default=repr)
+        return json.dumps({"key": parameters, "dtypes": dtypes, "fast_math": self.fast_math}, sort_keys=True, default=repr)
 
     def _valid_record(self, record):
         if not isinstance(record, dict) or not isinstance(record.get("config"), dict):
@@ -142,7 +145,7 @@ class Autotuner:
     def _run(self, grid, args, kwargs, values, config):
         merged = {**values, **config.values}
         resolved = (lambda _meta: grid(merged)) if callable(grid) else grid
-        return self.kernel._launch(resolved, args, {**kwargs, **config.values})
+        return self.kernel._launch(resolved, args, {**kwargs, **config.values}, self.fast_math)
 
     def _tune(self, grid, args, kwargs, values):
         from .compiler import Buffer, CompileError
@@ -154,23 +157,27 @@ class Autotuner:
         results = []
         for config in self.configs:
             try:
-                seconds = self._measure(grid, args, kwargs, values, config, saved)
+                seconds = self._measure(grid, args, kwargs, values, config, saved, self.repeat)
             except failures as error:
-                results.append({"config": config.values, "seconds": None, "error": str(error)})
+                results.append({"config": config.values, "seconds": None, "refined": None, "error": str(error)})
             else:
-                results.append({"config": config.values, "seconds": seconds, "error": None})
-        self._restore_buffers(saved)
+                results.append({"config": config.values, "seconds": seconds, "refined": None, "error": None})
 
         valid = [result for result in results if result["seconds"] is not None]
         if not valid:
+            self._restore_buffers(saved)
             reasons = "; ".join(f"{result['config']}: {result['error']}" for result in results)
             raise CompileError(f"no valid config for {self.kernel.__name__}: {reasons}")
-        best = min(valid, key=lambda result: result["seconds"])
+        finalists = sorted(valid, key=lambda result: result["seconds"])[:self.finalists]
+        for result in finalists:
+            result["refined"] = self._measure(grid, args, kwargs, values, Config(**result["config"]), saved, self.repeat * 3)
+        self._restore_buffers(saved)
+        best = min(finalists, key=lambda result: result["refined"])
         return {"config": best["config"], "results": results}
 
-    def _measure(self, grid, args, kwargs, values, config, saved):
+    def _measure(self, grid, args, kwargs, values, config, saved, repeat):
         samples = []
-        for run in range(self.warmup + self.repeat):
+        for run in range(self.warmup + repeat):
             self._restore_buffers(saved)
             event = self._run(grid, args, kwargs, values, config)
             if run < self.warmup:

@@ -81,6 +81,23 @@ def arange(start: int, end: int) -> Vec:
     return Vec(range(start, end))
 
 
+def shared(dtype, count: int) -> Pointer:
+    if _ctx["tracer"] is not None:
+        return _ctx["tracer"].shared(dtype, count)
+    return Pointer([0] * count, 0)
+
+
+def barrier() -> None:
+    if _ctx["tracer"] is not None:
+        _ctx["tracer"].barrier()
+
+
+def copy_to_shared(destination, source, width: int) -> None:
+    if _ctx["tracer"] is None:
+        raise NotImplementedError("copy_to_shared needs a traced kernel launch")
+    _ctx["tracer"].copy_to_shared(destination, source, width)
+
+
 def cdiv(a: int, b: int) -> int:
     return -(-a // b)
 

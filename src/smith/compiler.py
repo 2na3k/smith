@@ -104,8 +104,8 @@ class Kernel:
 _cache: dict[tuple[str, str], Kernel] = {}
 
 
-def compile_msl(source: str, name: str) -> Kernel:
-    key = (source, name)
+def compile_msl(source: str, name: str, fast_math: bool = True) -> Kernel:
+    key = (source, name, fast_math)
     if key in _cache:
         viz.record_compile(name, source, _cache[key].compile_seconds)
         return _cache[key]
@@ -115,8 +115,13 @@ def compile_msl(source: str, name: str) -> Kernel:
     started = time.perf_counter()
     with viz.span("compile", name, (name, source)), _autorelease_pool():
         try:
+            options = None
+            if not fast_math:
+                options = _send(_send(_objc.objc_getClass(b"MTLCompileOptions"), "alloc"), "init")
+                owned.append(options)
+                _send(options, "setFastMathEnabled:", False, restype=None, argtypes=(ctypes.c_bool,))
             err = ctypes.c_void_p()
-            library = _send(device, "newLibraryWithSource:options:error:", _nsstring(source), None, ctypes.byref(err),
+            library = _send(device, "newLibraryWithSource:options:error:", _nsstring(source), options, ctypes.byref(err),
                             argtypes=(ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)))
             if not library:
                 raise CompileError(_error_text(err.value) if err.value else "newLibraryWithSource failed")

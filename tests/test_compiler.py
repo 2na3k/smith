@@ -22,6 +22,12 @@ class TestCompiler(unittest.TestCase):
         self.assertTrue(k.pipeline)
         self.assertIs(k, compile_msl(ADD_ONE, "add_one"))
 
+    def test_precise_math_compiles_separately_from_fast_math(self):
+        fast = compile_msl(ADD_ONE, "add_one")
+        precise = compile_msl(ADD_ONE, "add_one", fast_math=False)
+        self.assertIsNot(fast, precise)
+        self.assertIs(precise, compile_msl(ADD_ONE, "add_one", fast_math=False))
+
     def test_bad_source_raises(self):
         with self.assertRaises(CompileError):
             compile_msl("kernel void broken( {", "broken")

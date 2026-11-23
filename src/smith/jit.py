@@ -63,9 +63,9 @@ class JITFunction:
             return self._launch(grid, args, kwargs)
         return launch
 
-    def _launch(self, grid, args, kwargs):
+    def _launch(self, grid, args, kwargs, fast_math=True):
         if _uses_metal(args, kwargs):
-            return self._launch_metal(grid, args, kwargs)
+            return self._launch_metal(grid, args, kwargs, fast_math)
         g = tuple(grid(kwargs) if callable(grid) else grid)
         g = g + (1,) * (3 - len(g))
         wrapped = [_wrap(arg) for arg in args]
@@ -95,11 +95,11 @@ class JITFunction:
         values, constexprs = self._bind(args, kwargs)
         return self._program(values, constexprs)
 
-    def _launch_metal(self, grid, args, kwargs):
+    def _launch_metal(self, grid, args, kwargs, fast_math=True):
         from .compiler import Buffer, compile_msl, launch
         values, constexprs = self._bind(args, kwargs)
         program = self._program(values, constexprs)
-        kernel = compile_msl(program.source, program.name)
+        kernel = compile_msl(program.source, program.name, fast_math)
 
         arguments = []
         for name in program.runtime_names:

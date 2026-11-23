@@ -51,6 +51,8 @@ pre.source .num { display: inline-block; width: 48px; text-align: right; padding
 .legend span { display: inline-block; margin-right: 12px; } .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
 .bar { height: 10px; border-radius: 2px; background: var(--accent); display: inline-block; vertical-align: middle; }
 .bar.best { background: var(--good); }
+.swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; }
+.stack { display:flex; height:12px; border-radius:3px; overflow:hidden; background:var(--panel2); } .stack > div { min-width:1px; }
 .muted { color: var(--muted); } .good { color: var(--good); } .bad { color: var(--bad); }
 .empty { color: var(--muted); padding: 30px; text-align: center; }
 svg text { font: 11px ui-monospace, Menlo, monospace; fill: #fff; }
@@ -215,12 +217,29 @@ function overviewHtml() {
 }
 
 const BASE_LANES = [
-  ["trace", "host: tracing"], ["compile", "host: compiling"], ["encode", "host: encode + submit"], ["wait", "host: blocked until GPU reports done"],
-  ["bridge", "host: mlx bridge call"], ["queue", "queue (submit to GPU)"], ["gpu", "GPU kernels"],
+  ["trace", "host: tracing"], ["compile", "host: compiling"], ["encode", "host: encode + submit"], ["wait", "host: blocked until GPU reports done"], ["mlx", "host: mlx call + wait (wall)"],
+  ["queue", "queue (submit to GPU)"], ["gpu", "GPU kernels"], ["ops", "GPU phases (modeled)"],
+  ["pattern", "one iteration, op to op"], ["unit:memory", "· memory loads/stores"], ["unit:matrix", "· matrix unit"], ["unit:alu", "· ALU"], ["unit:special", "· special fn (exp..)"],
+  ["unit:shared", "· shared mem + barrier"], ["unit:shuffle", "· SIMD shuffle"],
 ];
-const SPAN_COLORS = { wait: "#f2b84b", trace: "#a78bfa", compile: "#fb923c", bridge: "#d4d4d8" };
+const UNITS = {
+  memory: ["global load", "global store", "matrix load", "vector copy"], matrix: ["matrix multiply"],
+  alu: ["float arithmetic", "index math", "select / convert", "matrix registers"], special: ["special math"],
+  shared: ["shared memory", "barrier"], shuffle: ["shuffle"],
+};
+const CATEGORY_COLORS = {
+  "matrix multiply": "#ff7eb6", "matrix load": "#c084fc", "vector copy": "#22d3ee", "matrix registers": "#a78bfa", "global load": "#6aa9ff", "global store": "#38bdf8",
+  "shared memory": "#5fd38d", "barrier": "#f87171", "special math": "#fbbf24", "float arithmetic": "#fb923c", "index math": "#94a3b8",
+  "select / convert": "#64748b", "shuffle": "#2dd4bf",
+};
+const categoryColor = (name) => CATEGORY_COLORS[name] || "#888";
+const profileOf = (row) => {
+  const program = row.program === null || row.program === undefined ? null : app.data.programs[row.program];
+  return program && program.op_profile && row.batch_size === undefined ? program.op_profile : null;
+};
+const SPAN_COLORS = { mlx: "#e879f9", wait: "#f2b84b", trace: "#a78bfa", compile: "#fb923c" };
 const HOST_LEGEND = [["#22d3ee", "host encode + submit"], ["#6b7188", "queue wait (submit to GPU start)"], ["#f2b84b", "host blocked in waitUntilCompleted"],
-  ["#a78bfa", "tracing"], ["#fb923c", "compiling"], ["#d4d4d8", "mlx bridge call"]];
+  ["#a78bfa", "tracing"], ["#fb923c", "compiling"], ["#e879f9", "mlx call (dispatch + GPU + wait)"]];
 
 const kv = (pairs) => pairs.filter(([, value]) => value !== undefined && value !== null && value !== "");
 const at = (value) => `t=${value.toFixed(3)} ms`;
@@ -230,6 +249,74 @@ function launchFacts(row) {
     ["threadgroup", row.group.join(" x ") + ` = ${row.threads_per_group} threads`], ["threadgroups", row.groups],
     ["queue latency", fmtTime(row.queue_ms)], ["idle cores (modeled)", row.idle_cores === undefined ? undefined : `${row.idle_cores} of ${app.data.hardware.gpu_cores}`],
     ["SIMD lanes used", row.simd_efficiency === undefined ? undefined : pct(row.simd_efficiency)]]);
+}
+
+function phaseItems(row, profile, lane, label, opacity) {
+  const items = [];
+  let cursor = row.start;
+  profile.phases.forEach((phase) => {
+    const share = profile.total ? phase.cost / profile.total : 0, end = cursor + share * row.ms;
+    const parts = Object.entries(phase.categories).sort((a, b) => b[1].cost - a[1].cost);
+    items.push({ lane, start: cursor, end, color: categoryColor(phase.dominant), launch: row.id, opacity,
+      label: `${phase.label.replace("kernel", "k")} ${pct(share)}`,
+      info: { head: `${label}: ${phase.label}`, tag: "GPU ops (modeled)",
+        what: "Not a measurement: Metal has no counters inside a kernel. The kernel's real GPU time is split by a static cost model of the operations in the IR (weights in the table below), multiplied by loop trip counts. Colour is the category that dominates this phase.",
+        facts: kv([["modeled share of kernel", `${pct(share)} = ${fmtTime(share * row.ms)}`],
+          ["runs", phase.trips > 1 ? `${phase.trips} iterations per outer pass${phase.estimated ? " (trip count is an estimate)" : ""}` : "once"],
+          ["dominant", `${phase.dominant} ${pct(phase.categories[phase.dominant].cost / phase.cost)}`],
+          ...parts.slice(0, 4).map(([name, entry]) => [name, `${pct(entry.cost / phase.cost)} of phase, ${entry.count} SIMD ops`]),
+          ["one iteration, in order", sequenceText(phase)]]) } });
+    cursor = end;
+  });
+  return items;
+}
+
+function sequenceText(phase) {
+  const steps = phase.sequence.map(([name, count]) => `${name} x${count}`);
+  return steps.join(" > ");
+}
+
+function patternItems(row, profile, label) {
+  const items = [];
+  let cursor = row.start;
+  profile.phases.forEach((phase) => {
+    const length = (profile.total ? phase.cost / profile.total : 0) * row.ms, end = cursor + length;
+    const sum = phase.sequence.reduce((total, step) => total + step[2], 0) || 1;
+    let at_ = cursor;
+    phase.sequence.forEach(([name, count, cost], index) => {
+      const stop = at_ + cost / sum * length;
+      items.push({ lane: "pattern", start: at_, end: stop, color: categoryColor(name), launch: row.id, label: name.split(" ")[0] + " x" + count,
+        info: { head: `${label}: ${phase.label}`, tag: "one iteration, op to op (modeled)",
+          what: "The operations of one pass through this phase's body, in program order, each run of same-kind operations sized by its modeled cost, then stretched over the phase's time window. If the phase is a loop the same pattern repeats every iteration; the real iterations are far narrower than this lane. Not a measurement.",
+          facts: kv([["step", `${index + 1} of ${phase.sequence.length}`], ["operation", `${name} x${count} SIMD ops`], ["share of one iteration", pct(cost / sum)],
+            ["phase repeats", phase.trips > 1 ? `${phase.trips} iterations${phase.estimated ? " (estimated)" : ""}` : "once"]]) } });
+      at_ = stop;
+    });
+    cursor = end;
+  });
+  return items;
+}
+
+function unitItems(row, profile, label) {
+  const items = [];
+  let cursor = row.start;
+  profile.phases.forEach((phase) => {
+    const end = cursor + (profile.total ? phase.cost / profile.total : 0) * row.ms;
+    for (const [unit, names] of Object.entries(UNITS)) {
+      const cost = names.reduce((sum, name) => sum + (phase.categories[name] ? phase.categories[name].cost : 0), 0);
+      if (cost <= 0) continue;
+      const fraction = cost / phase.cost, parts = names.filter((name) => phase.categories[name]);
+      items.push({ lane: "unit:" + unit, start: cursor, end, color: categoryColor(parts.sort((a, b) => phase.categories[b].cost - phase.categories[a].cost)[0]),
+        launch: row.id, fill: fraction, label: pct(fraction),
+        info: { head: `${label}: ${phase.label}`, tag: `unit: ${unit} (modeled)`,
+          what: "How much of this phase's instruction work lands on this hardware unit. The bar's filled height is that share. Units run side by side on a core (memory, matrix and ALU work from different SIMD groups overlap), so shares across the unit lanes add up to 100% of the phase's work, but the phase is not serial between them. Not a measurement.",
+          facts: kv([["share of phase work", `${pct(fraction)} = ${fmtTime(fraction * (end - cursor))} of ${fmtTime(end - cursor)}`],
+            ...parts.map((name) => [name, `${phase.categories[name].count.toLocaleString()} SIMD ops`]),
+            ["one iteration, in order", sequenceText(phase)]]) } });
+    }
+    cursor = end;
+  });
+  return items;
 }
 
 function timelineItems(launches, spans, cores) {
@@ -261,10 +348,13 @@ function timelineItems(launches, spans, cores) {
           ? "The CPU ended encoding and committed the whole batch to the command queue. This is the one submit paid for all the dispatches in the batch."
           : "The CPU, in Python and Metal, created a command buffer and encoder, bound the pipeline, buffers and scalar arguments, dispatched the grid, then committed. The call returns without waiting for the GPU.",
         facts: kv([["host time", fmtTime(row.encode_ms)], ["started", at(row.encode_start)], ["committed", at(row.submit)]]) } });
+    const profile = profileOf(row);
+    if (profile) { items.push(...phaseItems(row, profile, "ops", label, 1)); items.push(...patternItems(row, profile, label)); items.push(...unitItems(row, profile, label)); }
     if (cores && row.core_loads) {
       const top = Math.max(...row.core_loads);
       row.core_loads.forEach((load, index) => {
-        if (load > 0) items.push({ lane: "core:" + index, start: row.start, end: row.end, color, launch: row.id, opacity: 0.35 + 0.65 * load / top,
+        if (load > 0 && profile) items.push(...phaseItems(row, profile, "core:" + index, `${label} on core ${index}`, 0.35 + 0.65 * load / top));
+        else if (load > 0) items.push({ lane: "core:" + index, start: row.start, end: row.end, color, launch: row.id, opacity: 0.35 + 0.65 * load / top,
           label: row.name.slice(0, 10) + " " + fmtTime(row.ms),
           info: { head: `${label} on core ${index}`, tag: "GPU core (modeled)",
             what: "Not a measurement: Metal exposes no per-core counters. Threadgroups are dealt round-robin to the cores, and a core is drawn busy for the kernel's whole duration if it gets at least one. Fainter means fewer threadgroups than the busiest core.",
@@ -281,7 +371,7 @@ function timelineItems(launches, spans, cores) {
 const SPAN_WHAT = {
   trace: "Python ran your @jit function once with symbolic values to record it as IR. The result is cached per set of constexpr values, so you pay this only on the first call.",
   compile: "The simplified IR was rendered to Metal source and compiled to a pipeline state by the Metal compiler. Cached per kernel, so repeat launches skip it.",
-  bridge: "A call through mx.fast.metal_kernel, which runs the kernel inside MLX. MLX owns the timing, so only this host span is shown and there is no GPU bar.",
+  mlx: "A call into MLX that was evaluated and waited on. MLX owns its command buffers, so Metal timestamps are not available: this wall-clock span covers dispatch, the GPU running the kernel and the wait, so it is an upper bound on the GPU time.",
   wait: "The CPU thread called waitUntilCompleted (from wait(), reading a buffer, or synchronize()) and sat blocked until Metal signalled completion. The GPU does the work while the CPU is blocked here.",
 };
 
@@ -339,7 +429,7 @@ function buildChart(launches, spans) {
   const coreLanes = app.showCores && cores && items.some((item) => item.lane.startsWith("core:"))
     ? Array.from({ length: cores }, (_, index) => ["core:" + index, `core ${index}  ${pct(usage.window ? usage.busy[index] / usage.window : null)}`]) : [];
   const lanes = [...BASE_LANES.filter(([id]) => items.some((item) => item.lane === id)), ...coreLanes];
-  const heightOf = (id) => (id.startsWith("core:") ? 20 : 28), left = 210, top = 26;
+  const heightOf = (id) => (id.startsWith("core:") || id.startsWith("unit:") ? 20 : 28), left = 210, top = 26;
   const width = Math.max(700, document.getElementById("main").clientWidth - 48) * app.zoom;
   const scale = (width - left - 20) / total;
   const offsets = new Map();
@@ -347,7 +437,7 @@ function buildChart(launches, spans) {
   for (const [id] of lanes) {
     const ends = [];
     for (const item of items.filter((candidate) => candidate.lane === id).sort((a, b) => a.start - b.start)) {
-      if (id.startsWith("core:")) { item.sub = 0; ends[0] = 1; continue; }
+      if (id.startsWith("core:") || id.startsWith("unit:") || id === "ops" || id === "pattern") { item.sub = 0; ends[0] = 1; continue; }
       const x0 = warp(item.start) * scale, x1 = Math.max(x0 + 2, warp(item.end) * scale) + 1;
       let sub = ends.findIndex((end) => end <= x0);
       if (sub < 0) { sub = ends.length; ends.push(0); }
@@ -376,7 +466,8 @@ function buildChart(launches, spans) {
     for (const item of items.filter((candidate) => candidate.lane === id)) {
       const x = left + warp(item.start) * scale, w = Math.max(1.5, (warp(item.end) - warp(item.start)) * scale), rowY = y + item.sub * laneHeight;
       svg += `<g class="bar${barKey(item) === app.selectedBar ? " sel" : ""}" data-i="${items.indexOf(item)}" ${item.launch !== undefined ? `data-launch="${item.launch}"` : ""}>
-        <rect x="${x}" y="${rowY + 2}" width="${w}" height="${laneHeight - 5}" rx="2" fill="${item.color}" opacity="${item.opacity === undefined ? 1 : item.opacity}"/>
+        ${item.fill === undefined ? "" : `<rect x="${x}" y="${rowY + 2}" width="${w}" height="${laneHeight - 5}" rx="2" fill="${item.color}" opacity="0.14"/>`}
+        <rect x="${x}" y="${rowY + 2 + (item.fill === undefined ? 0 : (laneHeight - 5) * (1 - item.fill))}" width="${w}" height="${Math.max(1.5, (laneHeight - 5) * (item.fill === undefined ? 1 : item.fill))}" rx="2" fill="${item.color}" opacity="${item.opacity === undefined ? 1 : item.opacity}"/>
         ${w > item.label.length * 6.8 + 10 ? `<text x="${x + 4}" y="${rowY + laneHeight - 7}" style="fill:#0b0d12;font-weight:600;pointer-events:none">${item.label}</text>` : ""}</g>`;
     }
   });
@@ -446,6 +537,8 @@ function chartControls(extra) {
 function chartNote() {
   const legend = HOST_LEGEND.map(([color, label]) => `<span style="display:inline-block;margin-right:14px"><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color};margin-right:5px"></i>${label}</span>`).join("");
   return `<p class="muted"><span style="display:block;margin-bottom:6px">GPU kernel bars use one color per kernel (blue, green, pink, ...). Host-side colors: ${legend}</span>${app.compress ? "Idle gaps over 1 ms are collapsed (dashed lines); everything inside a burst is to real scale." : "Real time scale."}
+    The <b>GPU ops</b> lane and each core lane split a kernel's real GPU time into phases (setup, each loop, epilogue) using a static cost model of the IR; colours are the dominant operation category:
+    ${Object.entries(CATEGORY_COLORS).map(([name, color]) => `<span style="display:inline-block;margin-right:10px"><i class="swatch" style="background:${color}"></i>${name}</span>`).join("")}.
     Click any bar for its launch details. <b>Core lanes are modeled</b>: a core is drawn busy for a kernel's whole duration when the round-robin model gives it at least one
     threadgroup, and fainter when it holds fewer threadgroups than the busiest core; an empty core lane means no threadgroup was assigned to it. Metal exposes no per-core timing.
     The percentage on each core is its busy time over the time GPU kernels were running.</p>`;
@@ -535,6 +628,29 @@ function coreGrid(row, hardware) {
   return svg + `</svg>`;
 }
 
+function opBreakdown(row) {
+  const profile = profileOf(row);
+  if (!profile) return "";
+  const total = profile.total || 1, categories = Object.entries(profile.categories).sort((a, b) => b[1].cost - a[1].cost);
+  const bar = categories.map(([name, entry]) => `<div title="${escapeHtml(name)} ${pct(entry.cost / total)}" style="flex:${entry.cost};background:${categoryColor(name)}"></div>`).join("");
+  const categoryRows = categories.map(([name, entry]) => `<tr><td><i class="swatch" style="background:${categoryColor(name)}"></i>${escapeHtml(name)}</td>
+    <td class="num">${pct(entry.cost / total)}</td><td class="num">${fmtTime(entry.cost / total * row.ms)}</td><td class="num">${entry.count.toLocaleString()}</td>
+    <td class="num">${profile.weights[name].cost}</td><td class="muted">${escapeHtml(profile.weights[name].what)}</td></tr>`).join("");
+  const phaseRows = profile.phases.map((phase) => {
+    const share = phase.cost / total, parts = Object.entries(phase.categories).sort((a, b) => b[1].cost - a[1].cost);
+    const mini = parts.map(([name, entry]) => `<div title="${escapeHtml(name)} ${pct(entry.cost / phase.cost)}" style="flex:${entry.cost};background:${categoryColor(name)}"></div>`).join("");
+    return `<tr><td>${escapeHtml(phase.label)}${phase.estimated ? ` <span class="muted">(trips estimated)</span>` : ""}</td><td class="num">${pct(share)}</td><td class="num">${fmtTime(share * row.ms)}</td>
+      <td class="num">${phase.count.toLocaleString()}</td><td><div class="stack" style="width:220px">${mini}</div></td><td class="muted">${parts.slice(0, 3).map(([name, entry]) => `${escapeHtml(name)} ${pct(entry.cost / phase.cost)}`).join(", ")}</td></tr>`;
+  }).join("");
+  return `<h3 style="margin-top:18px">Operation to operation (modeled)</h3>
+    <p class="muted">Metal gives no timing inside a kernel, so this splits the measured ${fmtTime(row.ms)} by a static cost model of the IR: per-SIMD-group op counts times loop trips, weighted per category.
+    The order is program order; SIMD groups on a core overlap in reality, so read the shares as where the instruction work is, not as a serial trace. Wait on memory is not modeled, so a memory-bound kernel will be under-reported on the load rows.</p>
+    <div class="stack" style="height:22px;margin:6px 0 10px">${bar}</div>
+    <table><tr><th>category</th><th class="num">share</th><th class="num">time</th><th class="num">SIMD ops</th><th class="num">weight</th><th>what it is</th></tr>${categoryRows}</table>
+    <h3 style="margin-top:14px">Phases in program order (the segments on the core lanes)</h3>
+    <table><tr><th>phase</th><th class="num">share</th><th class="num">time</th><th class="num">SIMD ops</th><th>mix</th><th>top categories</th></tr>${phaseRows}</table>`;
+}
+
 function launchDetail(row, hardware) {
   const cores = hardware.gpu_cores;
   let verdict = "";
@@ -550,7 +666,7 @@ function launchDetail(row, hardware) {
       <tr><td>GPU execution</td><td class="num"><b>${fmtTime(row.ms)}</b></td></tr></table>
       ${row.batch_size ? `<p class="muted">Batch of ${row.batch_size} kernels committed together: Metal reports GPU time for the whole command buffer, so this time covers all of them.</p>` : ""}
       <p>${verdict}</p><p>${row.threads_per_group} threads per group = ${row.simd_groups} SIMD groups: ${lanes}.</p>
-      <p class="muted">Core loads are modeled by dealing threadgroups round-robin to ${cores} cores. Metal does not expose per-core counters, so this is an estimate from the launch shape, not a measurement.</p></div></div>`;
+      <p class="muted">Core loads are modeled by dealing threadgroups round-robin to ${cores} cores. Metal does not expose per-core counters, so this is an estimate from the launch shape, not a measurement.</p></div></div>${opBreakdown(row)}`;
 }
 
 function showSelectedLaunch() {

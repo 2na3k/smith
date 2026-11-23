@@ -10,8 +10,9 @@ COMPARISONS = ("less", "less_equal", "greater", "greater_equal")
 EXTREMA = ("maximum", "minimum")
 MATH = ("exp", "log", "sqrt", "rsqrt")
 BINARY = ARITHMETIC + BITWISE + SHIFTS + COMPARISONS + EXTREMA
-RECREATED = ("const", "argument", "buffer", "program_id", "program_count", "lane")
+RECREATED = ("const", "argument", "buffer", "shared", "program_id", "program_count", "lane")
 LEAVES = RECREATED + ("capture", "loop_index", "carried")
+EFFECTS = ("store", "barrier", "copy")
 MATRIX = ("matrix_fill", "matrix_load", "matrix_mma", "matrix_element", "matrix_make")
 PACKED_ELEMENTS = {int2: int8, uint2: uint8, int4: int8, uint4: uint8}
 INTEGERS = {("int", 8): int8, ("int", 16): int16, ("int", 32): int32, ("int", 64): int64,
@@ -59,7 +60,7 @@ class LoopBody:
         self.carried = carried
         self.outputs = outputs
         self.captures = list(graph.captures)
-        self.has_stores = any(node.op == "store" or (node.op == "loop" and node.arg.has_stores)
+        self.has_stores = any(node.op in EFFECTS or (node.op == "loop" and node.arg.has_stores)
                               for node in graph.nodes)
 
 
@@ -113,6 +114,13 @@ class Graph:
 
     def buffer(self, name, dtype):
         return self.node("buffer", arg=name, dtype=dtype)
+
+    def shared(self, name, dtype, count):
+        return self.node("shared", arg=(name, count), dtype=dtype)
+
+    def barrier(self):
+        self.version += 1
+        return self.node("barrier", arg=self.version, unique=True)
 
     def program_id(self, axis):
         return self.node("program_id", arg=axis, dtype=int32)
@@ -199,6 +207,17 @@ class Graph:
         self.version += 1
         return self.node("store", inputs, arg=self.version, unique=True)
 
+    def copy(self, destination, destination_offset, source, source_offset, width):
+        if destination.op != "shared" or source.op != "buffer":
+            raise TypeError("copy_to_shared copies from a kernel buffer into shared memory")
+        if destination.dtype != source.dtype:
+            raise TypeError(f"copy_to_shared needs matching element types, got {destination.dtype} and {source.dtype}")
+        if destination.dtype in PACKED_ELEMENTS or destination.dtype.bits % 8 or destination.dtype.bits * width not in (32, 64, 128):
+            raise TypeError("copy_to_shared moves 4, 8 or 16 bytes per thread: width * element size must be one of those")
+        inputs = (destination, self.cast(destination_offset, int32), source, self.cast(source_offset, int32))
+        self.version += 1
+        return self.node("copy", inputs, arg=width, unique=True)
+
     def matrix_fill(self, value, element):
         if element.kind != "float":
             raise TypeError("simdgroup matrices hold float values")
@@ -246,7 +265,7 @@ def walk(graph):
 
 def live_nodes(graph, roots=()):
     live = set()
-    stack = [node for node in graph.nodes if node.op == "store" or (node.op == "loop" and node.arg.has_stores)]
+    stack = [node for node in graph.nodes if node.op in EFFECTS or (node.op == "loop" and node.arg.has_stores)]
     stack.extend(roots)
     while stack:
         node = stack.pop()

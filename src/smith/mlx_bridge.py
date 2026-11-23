@@ -4,7 +4,6 @@ import math
 from . import dtype as dtype_module
 from .dtype import DType
 from .jit import JITFunction
-from . import viz
 from .render import render_statements
 from .trace import BufferSpec
 
@@ -56,6 +55,8 @@ def mlx_leaf(node):
         return f"{node.arg}[0]"
     if node.op == "buffer":
         return node.arg
+    if node.op == "shared":
+        return node.arg[0]
     if node.op == "program_id":
         return f"int(threadgroup_position_in_grid.{'xyz'[node.arg]})"
     if node.op == "program_count":
@@ -105,8 +106,7 @@ class MLXKernel:
 
     def __getitem__(self, grid):
         def launch(*args, init_value=None, **kwargs):
-            with viz.span("bridge", self.__name__) as active:
-                return self._launch(grid, args, kwargs, init_value, active)
+            return self._launch(grid, args, kwargs, init_value)
         return launch
 
     def _kernel(self, body, input_names, output_names, header=""):
@@ -121,7 +121,7 @@ class MLXKernel:
             )
         return self.kernels[key]
 
-    def _launch(self, grid, args, kwargs, init_value, active=None):
+    def _launch(self, grid, args, kwargs, init_value):
         mx = _mlx()
         values, constexprs = self.jit_function._bind(args, kwargs)
         arrays = {name: value for name, value in values.items()
@@ -138,8 +138,6 @@ class MLXKernel:
             else:
                 raise TypeError(f"unsupported kernel argument {name!r} of type {type(value).__name__}")
         program = self.jit_function._program(traced, constexprs)
-        if active is not None:
-            active.key = (program.name, program.source)
 
         input_names, output_names = [], []
         for name in program.runtime_names:

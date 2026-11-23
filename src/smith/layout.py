@@ -232,8 +232,8 @@ def evaluate(program, grid, scalars=None, buffers=None):
             lengths[name] = len(contents[name])
     live = live_nodes(program.graph)
     nodes = [node for node in program.graph.nodes if node.index in live]
-    if any(node.op == "loop" for node in nodes):
-        raise NotImplementedError("layout analysis does not support kernels with loops yet")
+    if any(node.op in ("loop", "shared", "barrier", "copy") for node in nodes):
+        raise NotImplementedError("layout analysis does not support kernels with loops or threadgroup memory yet")
     accesses = []
     for program_id in itertools.product(*(range(size) for size in grid)):
         for lane in range(program.lanes):

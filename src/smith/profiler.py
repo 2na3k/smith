@@ -25,7 +25,7 @@ class LaunchRecord:
 def _memory_nodes(program):
     live = live_nodes(program.graph)
     return [node for node in program.graph.nodes
-            if node.index in live and node.op in ("load", "store")]
+            if node.index in live and node.op in ("load", "store") and node.inputs[0].op == "buffer"]
 
 
 def estimate_bytes(program, dispatch, scalars=None, buffers=None):

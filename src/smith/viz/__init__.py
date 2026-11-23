@@ -9,6 +9,7 @@ import weakref
 from collections import deque
 
 from ..ir import live_nodes
+from . import opprofile
 
 LAUNCH_LIMIT = 4000
 SPAN_LIMIT = 20000
@@ -136,6 +137,7 @@ def record_program(program):
         "compile_ms": None,
         "stages": {"traced": traced, "simplified": simplified},
         "op_counts": {"traced": op_counts(traced), "simplified": op_counts(simplified)},
+        "op_profile": opprofile.profile(simplified),
     })
     state.version += 1
 
@@ -363,6 +365,7 @@ def snapshot():
             "core_efficiency": shape.get("core_efficiency") if shape else None,
             "simd_efficiency": shape["simd_efficiency"] if shape else None,
             "nodes": {name: len(graph["nodes"]) for name, graph in entry["stages"].items()},
+            "op_profile": None if entry["phase"] == "tuning" and not times else entry["op_profile"],
         })
     run = [row for row in rows if row["phase"] == "run" and row.get("ms") is not None]
     busy = sum(row["ms"] for row in run)

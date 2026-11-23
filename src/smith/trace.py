@@ -67,6 +67,7 @@ class Tracer:
     def __init__(self):
         self.graph = Graph()
         self.lanes = None
+        self.shared_count = 0
 
     def _symbol(self, node):
         return Symbol(node)
@@ -120,6 +121,17 @@ class Tracer:
         finished = outer.loop(outer.const(0), _lift(count), inits, LoopBody(child, index, carried, outputs))
         return tuple(Symbol(node) for node in finished)
 
+    def shared(self, dtype, count):
+        name = f"shared_{self.shared_count}"
+        self.shared_count += 1
+        return Pointer(TracedBuffer(name, dtype, self.graph.shared(name, dtype, count)), 0)
+
+    def barrier(self):
+        self.graph.barrier()
+
+    def copy_to_shared(self, destination, source, width):
+        self.graph.copy(destination.buffer.node, _lift(destination.offset), source.buffer.node, _lift(source.offset), width)
+
     def program_id(self, axis):
         return self._symbol(self.graph.program_id(axis))
 
@@ -169,8 +181,9 @@ class Program:
         self.buffers = buffers
         self.scalars = scalars
         self.uses_matrices = any(n.op.startswith("matrix_") for n in walk(graph))
-        self.loaded = frozenset(n.inputs[0].arg for n in walk(graph) if n.op in ("load", "matrix_load"))
-        self.stored = frozenset(n.inputs[0].arg for n in walk(graph) if n.op == "store")
+        read = [n.inputs[0] for n in walk(graph) if n.op in ("load", "matrix_load")] + [n.inputs[2] for n in walk(graph) if n.op == "copy"]
+        self.loaded = frozenset(source.arg for source in read if source.op == "buffer")
+        self.stored = frozenset(n.inputs[0].arg for n in walk(graph) if n.op == "store" and n.inputs[0].op == "buffer")
 
 
 RESERVED_NAMES = frozenset({
